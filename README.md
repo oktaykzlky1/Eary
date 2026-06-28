@@ -1,16 +1,66 @@
-# React + Vite
+# Eary
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+Eary is a mobile messaging app focused on accessible communication, speech-to-text support, translation, and face-to-face conversation tools.
 
-Currently, two official plugins are available:
+## Setup
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+Install dependencies:
 
-## React Compiler
+```bash
+npm install
+```
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+Build the web app:
 
-## Expanding the ESLint configuration
+```bash
+npm run build
+```
 
-If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and [`typescript-eslint`](https://typescript-eslint.io) in your project.
+Sync mobile projects:
+
+```bash
+npx cap sync android
+npx cap sync ios
+```
+
+## Android APK
+
+After setup and sync, open this folder in Android Studio:
+
+```text
+android
+```
+
+Then run:
+
+```text
+Build > Clean Project
+Build > Rebuild Project
+Build > Build Bundle(s) / APK(s) > Build APK(s)
+```
+
+The debug APK is generated under:
+
+```text
+android/app/build/outputs/apk/debug/
+```
+
+## Web Deploy
+
+Build first:
+
+```bash
+npm run build
+```
+
+Deploy Firebase Hosting:
+
+```bash
+npm exec --yes firebase-tools -- deploy --only hosting
+```
+
+## Notes
+
+- `node_modules`, `dist`, Android build outputs, iOS build outputs, and local caches are intentionally not committed.
+- After cloning on another computer, always run `npm install`, then `npm run build`, then `npx cap sync android` before opening/building Android.
+- Android includes 16 KB device compatibility package settings in `android/app/build.gradle` and `AndroidManifest.xml`.
