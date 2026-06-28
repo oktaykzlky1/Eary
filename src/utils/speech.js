@@ -28,6 +28,8 @@ const normalizeSpeechChunk = text => String(text || '')
     .replace(/\s+/g, ' ')
     .trim();
 
+const isAndroidNative = () => Capacitor.getPlatform() === 'android';
+
 class WebSpeechRecognizer {
     constructor(language, onResult, onEnd, onError) {
         const SpeechRecognitionClass = window.SpeechRecognition || window.webkitSpeechRecognition;
@@ -128,11 +130,12 @@ class NativeSpeechRecognizer {
     async start() {
         if (this.isListening || this.isStartingOrRestarting) return;
         try {
-            // Call native audio routing configuration
-            try {
-                await VoiceSettings.startAudioRouting();
-            } catch (e) {
-                console.error("Failed to start audio routing:", e);
+            if (isAndroidNative()) {
+                try {
+                    await VoiceSettings.startAudioRouting();
+                } catch (e) {
+                    console.error("Failed to start audio routing:", e);
+                }
             }
 
             // 1. Verify and request Android native microphone permissions
@@ -295,11 +298,12 @@ class NativeSpeechRecognizer {
         this.isStartingOrRestarting = true;
         this.startedAt = Date.now();
         try {
-            // Re-apply audio routing configuration on restart
-            try {
-                await VoiceSettings.startAudioRouting();
-            } catch (errRoute) {
-                console.error("Failed to start audio routing on restart:", errRoute);
+            if (isAndroidNative()) {
+                try {
+                    await VoiceSettings.startAudioRouting();
+                } catch (errRoute) {
+                    console.error("Failed to start audio routing on restart:", errRoute);
+                }
             }
 
             // Finalize the last partial text if any
@@ -344,10 +348,12 @@ class NativeSpeechRecognizer {
             this.finalizeNativeChunk(this.lastPartialText);
         }
 
-        try {
-            await VoiceSettings.stopAudioRouting();
-        } catch (e) {
-            console.error("Failed to stop audio routing:", e);
+        if (isAndroidNative()) {
+            try {
+                await VoiceSettings.stopAudioRouting();
+            } catch (e) {
+                console.error("Failed to stop audio routing:", e);
+            }
         }
 
         await this.removeListeners();

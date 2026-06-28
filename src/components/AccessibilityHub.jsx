@@ -583,8 +583,12 @@ function AmbientListeningTool({ onBack }) {
                 ) : captions.length === 0 && !interim ? (
                     <div className="flex h-full flex-col items-center justify-center text-center">
                         <Captions size={36} className="eary-brand"/>
-                        <h2 className="mt-3 font-bold">Canlı altyazı hazır</h2>
-                        <p className="eary-muted mt-1 max-w-xs text-xs leading-5">Telefonu veya yaka mikrofonunu konuşan kişiye yaklaştırın. Mikrofon açık kaldığı sürece metin okunabilir paragraflara ayrılır.</p>
+                        <h2 className="mt-3 font-bold">{listening ? 'Konuşma bekleniyor' : 'Canlı altyazı hazır'}</h2>
+                        <p className="eary-muted mt-1 max-w-xs text-xs leading-5">
+                            {listening
+                                ? 'Konuşma algılandığında burada görünecek. Boş veya hatalı kısa sonuçlar metne eklenmez.'
+                                : 'Telefonu veya yaka mikrofonunu konuşan kişiye yaklaştırın. Mikrofon açık kaldığı sürece metin okunabilir paragraflara ayrılır.'}
+                        </p>
                     </div>
                 ) : (
                     <div className="space-y-3">
