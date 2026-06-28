@@ -4,6 +4,8 @@ import { SpeechRecognition } from '@capgo/capacitor-speech-recognition';
 const VoiceSettings = registerPlugin('VoiceSettings');
 let nativePermissionRequestPromise = null;
 
+const isIOSNative = () => Capacitor.getPlatform() === 'ios';
+
 const nativeSpeechErrorText = error => {
     try {
         return [error?.message, error?.error, JSON.stringify(error), String(error || '')]
@@ -117,11 +119,12 @@ class NativeSpeechRecognizer {
     async start() {
         if (this.isListening || this.isStartingOrRestarting) return;
         try {
-            // Call native audio routing configuration
-            try {
-                await VoiceSettings.startAudioRouting();
-            } catch (e) {
-                console.error("Failed to start audio routing:", e);
+            if (!isIOSNative()) {
+                try {
+                    await VoiceSettings.startAudioRouting();
+                } catch (e) {
+                    console.error("Failed to start audio routing:", e);
+                }
             }
 
             // 1. Verify and request Android native microphone permissions
@@ -161,7 +164,7 @@ class NativeSpeechRecognizer {
                     this.isStartingOrRestarting = false;
                 }
                 if (data && data.state === "stopped" && this.isListening) {
-                    if (Capacitor.getPlatform() === 'ios') {
+                    if (isIOSNative()) {
                         this.isListening = false;
                         this.isStartingOrRestarting = false;
                         this.onEnd();
@@ -176,7 +179,7 @@ class NativeSpeechRecognizer {
                 console.error("Native SpeechRecognition Error Event:", data);
                 if (this.isListening) {
                     const errorMsg = data.message || data.error || "";
-                    if (Capacitor.getPlatform() === 'ios') {
+                    if (isIOSNative()) {
                         this.isListening = false;
                         this.isStartingOrRestarting = false;
                         this.onError(errorMsg || "Speech Recognition Error");
@@ -192,7 +195,7 @@ class NativeSpeechRecognizer {
             });
 
             let useOnDeviceRecognition = false;
-            if (Capacitor.getPlatform() !== 'ios') {
+            if (!isIOSNative()) {
                 try {
                     const availability = await SpeechRecognition.isOnDeviceRecognitionAvailable({ language: this.language });
                 useOnDeviceRecognition = Boolean(availability?.available);
@@ -202,7 +205,9 @@ class NativeSpeechRecognizer {
                 }
             }
 
-            await SpeechRecognition.setPTTState({ held: true });
+            if (!isIOSNative()) {
+                await SpeechRecognition.setPTTState({ held: true });
+            }
 
             // 4. Launch native speech recognizer silently in the background (no popup)
             await SpeechRecognition.start({
@@ -212,14 +217,14 @@ class NativeSpeechRecognizer {
                 popup: false,
                 addPunctuation: true,
                 allowForSilence: 3000,
-                continuousPTT: Capacitor.getPlatform() !== 'ios',
+                continuousPTT: !isIOSNative(),
                 useOnDeviceRecognition
             });
 
         } catch (err) {
             this.isStartingOrRestarting = false;
             if (this.isListening) {
-                if (Capacitor.getPlatform() === 'ios') {
+                if (isIOSNative()) {
                     this.isListening = false;
                     this.onError(err);
                     return;
@@ -245,6 +250,7 @@ class NativeSpeechRecognizer {
 
     async restartListening() {
         if (!this.isListening) return;
+        if (isIOSNative()) return;
         if (this.isStartingOrRestarting) {
             console.log("Speech recognition is already starting/restarting, skipping redundant restart call.");
             return;
@@ -252,7 +258,6 @@ class NativeSpeechRecognizer {
         this.isStartingOrRestarting = true;
         this.startedAt = Date.now();
         try {
-            // Re-apply audio routing configuration on restart
             try {
                 await VoiceSettings.startAudioRouting();
             } catch (errRoute) {
@@ -273,7 +278,7 @@ class NativeSpeechRecognizer {
                 popup: false,
                 addPunctuation: true,
                 allowForSilence: 3000,
-                continuousPTT: Capacitor.getPlatform() !== 'ios',
+                continuousPTT: true,
                 useOnDeviceRecognition: this.useOnDeviceRecognition
             });
         } catch (e) {
@@ -292,23 +297,30 @@ class NativeSpeechRecognizer {
         this.restartTimer = null;
         
         try {
-            await SpeechRecognition.setPTTState({ held: false });
-            const cached = await SpeechRecognition.getLastPartialResult();
-            await SpeechRecognition.forceStop({ timeout: 1000 });
-            const finalText = String(cached?.text || this.lastPartialText || '').trim();
-            if (finalText) this.onResult(finalText, "");
+            if (isIOSNative()) {
+                const result = await SpeechRecognition.stop();
+                const finalText = String(result?.matches?.[0] || this.lastPartialText || '').trim();
+                if (finalText) this.onResult(finalText, "");
+            } else {
+                await SpeechRecognition.setPTTState({ held: false });
+                const cached = await SpeechRecognition.getLastPartialResult();
+                await SpeechRecognition.forceStop({ timeout: 1000 });
+                const finalText = String(cached?.text || this.lastPartialText || '').trim();
+                if (finalText) this.onResult(finalText, "");
+            }
         } catch (e) {
             console.error("Error stopping Speech Recognition:", e);
-            // Fallback in case of error
             if (this.lastPartialText.trim()) {
                 this.onResult(this.lastPartialText.trim(), "");
             }
         }
 
-        try {
-            await VoiceSettings.stopAudioRouting();
-        } catch (e) {
-            console.error("Failed to stop audio routing:", e);
+        if (!isIOSNative()) {
+            try {
+                await VoiceSettings.stopAudioRouting();
+            } catch (e) {
+                console.error("Failed to stop audio routing:", e);
+            }
         }
 
         await this.removeListeners();
