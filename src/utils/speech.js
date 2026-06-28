@@ -103,12 +103,13 @@ class WebSpeechRecognizer {
 }
 
 class NativeSpeechRecognizer {
-    constructor(language, onResult, onEnd, onError) {
+    constructor(language, onResult, onEnd, onError, options = {}) {
         this.supported = true;
         this.language = language;
         this.onResult = onResult;
         this.onEnd = onEnd;
         this.onError = onError;
+        this.mode = options.mode || 'default';
         this.listener = null;
         this.stateListener = null;
         this.errorListener = null;
@@ -121,6 +122,7 @@ class NativeSpeechRecognizer {
         this.lastInterimText = '';
         this.lastFinalText = '';
         this.lastFinalAt = 0;
+        this.useNativeContinuousPTT = !(Capacitor.getPlatform() === 'ios' && this.mode === 'ambient');
     }
 
     async start() {
@@ -182,7 +184,7 @@ class NativeSpeechRecognizer {
                     this.isStartingOrRestarting = false;
                 }
                 if (data && data.state === "stopped" && this.isListening) {
-                    if (Capacitor.getPlatform() === 'ios' && data.reason === 'results') {
+                    if (Capacitor.getPlatform() === 'ios' && data.reason === 'results' && this.useNativeContinuousPTT) {
                         this.lastPartialText = '';
                         this.lastInterimText = '';
                         this.isStartingOrRestarting = false;
@@ -230,7 +232,7 @@ class NativeSpeechRecognizer {
                 popup: false,
                 addPunctuation: true,
                 allowForSilence: 3000,
-                continuousPTT: true,
+                continuousPTT: this.useNativeContinuousPTT,
                 useOnDeviceRecognition
             });
             this.isStartingOrRestarting = false;
@@ -311,7 +313,7 @@ class NativeSpeechRecognizer {
                 popup: false,
                 addPunctuation: true,
                 allowForSilence: 3000,
-                continuousPTT: true,
+                continuousPTT: this.useNativeContinuousPTT,
                 useOnDeviceRecognition: this.useOnDeviceRecognition
             });
             this.isStartingOrRestarting = false;
@@ -392,9 +394,9 @@ class NativeSpeechRecognizer {
     }
 }
 
-export const getDuoSpeechRecognizer = (language, onResult, onEnd, onError) => {
+export const getDuoSpeechRecognizer = (language, onResult, onEnd, onError, options = {}) => {
     if (Capacitor.isNativePlatform()) {
-        return new NativeSpeechRecognizer(language, onResult, onEnd, onError);
+        return new NativeSpeechRecognizer(language, onResult, onEnd, onError, options);
     } else {
         return new WebSpeechRecognizer(language, onResult, onEnd, onError);
     }

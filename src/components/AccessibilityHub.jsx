@@ -461,7 +461,7 @@ function AmbientListeningTool({ onBack }) {
             setListening(false);
             setInterim(String(error?.message || 'Mikrofon başlatılamadı'));
             setTimeout(() => setInterim(''), 2400);
-        });
+        }, { mode: 'ambient' });
         recognizerRef.current = recognizer;
         try {
             await recognizer.start();
