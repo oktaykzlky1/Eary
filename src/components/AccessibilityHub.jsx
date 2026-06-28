@@ -106,6 +106,26 @@ const segmentListeningText = text => {
         .filter(Boolean);
 };
 
+const normalizeListeningPhrase = text => String(text || '')
+    .toLocaleLowerCase('tr-TR')
+    .replace(/[^\p{L}\p{N}]+/gu, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+const isAmbientFillerOnly = text => {
+    const value = normalizeListeningPhrase(text);
+    return [
+        'evet',
+        'evet evet',
+        'tamam',
+        'tamam tamam',
+        'hı hı',
+        'hmm',
+        'he',
+        'ha'
+    ].includes(value);
+};
+
 const isImportantListeningText = (text, contextConfig) => {
     const value = String(text || '').toLocaleLowerCase('tr-TR');
     const contextKeywords = contextConfig.groups.flatMap(group => group.keywords);
@@ -444,9 +464,11 @@ function AmbientListeningTool({ onBack }) {
     const startListening = async () => {
         desiredListeningRef.current = true;
         const recognizer = getDuoSpeechRecognizer(language, (finalText, interimText, confidence) => {
-            setInterim(interimText ? cleanListeningText(interimText, language).replace(/[.!?]$/, '') : '');
+            const cleanedInterim = interimText ? cleanListeningText(interimText, language).replace(/[.!?]$/, '') : '';
+            setInterim(cleanedInterim && !isAmbientFillerOnly(cleanedInterim) ? cleanedInterim : '');
             if (finalText?.trim()) {
-                appendCaption(finalText.trim(), confidence);
+                const cleanedFinal = cleanListeningText(finalText.trim(), language);
+                if (!isAmbientFillerOnly(cleanedFinal)) appendCaption(finalText.trim(), confidence);
                 setInterim('');
             }
         }, () => {
