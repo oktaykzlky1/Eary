@@ -30,6 +30,12 @@ const normalizeSpeechChunk = text => String(text || '')
 
 const isAndroidNative = () => Capacitor.getPlatform() === 'android';
 
+const isLikelyIosPhantomStartChunk = text => {
+    if (Capacitor.getPlatform() !== 'ios') return false;
+    return ['evet', 'evet evet', 'tamam', 'tamam tamam', 'hı hı', 'hmm', 'he', 'ha']
+        .includes(normalizeSpeechChunk(text));
+};
+
 class WebSpeechRecognizer {
     constructor(language, onResult, onEnd, onError) {
         const SpeechRecognitionClass = window.SpeechRecognition || window.webkitSpeechRecognition;
@@ -125,6 +131,7 @@ class NativeSpeechRecognizer {
         this.lastFinalText = '';
         this.lastFinalAt = 0;
         this.useNativeContinuousPTT = true;
+        this.ignoredPhantomStart = false;
     }
 
     async start() {
@@ -155,6 +162,7 @@ class NativeSpeechRecognizer {
             this.isListening = true;
             this.lastPartialText = '';
             this.lastInterimText = '';
+            this.ignoredPhantomStart = false;
             this.isStartingOrRestarting = true;
             this.startedAt = Date.now();
 
@@ -165,6 +173,7 @@ class NativeSpeechRecognizer {
                 if (data && data.matches && data.matches.length > 0) {
                     const text = String(data.matches[0] || '').trim();
                     if (!text) return;
+                    if (this.shouldIgnoreNativeChunk(text)) return;
 
                     const isSegmentFinal = Boolean(data.isRestarting || data.forced);
                     if (isSegmentFinal) {
@@ -264,9 +273,23 @@ class NativeSpeechRecognizer {
         );
     }
 
+    shouldIgnoreNativeChunk(text) {
+        const sinceStart = Date.now() - this.startedAt;
+        if (!this.lastPartialText && !this.lastInterimText && sinceStart < 2200 && isLikelyIosPhantomStartChunk(text)) {
+            this.ignoredPhantomStart = true;
+            return true;
+        }
+        return false;
+    }
+
     finalizeNativeChunk(text) {
         const finalText = String(text || '').trim();
         if (!finalText) return false;
+        if (this.shouldIgnoreNativeChunk(finalText)) {
+            this.lastPartialText = '';
+            this.lastInterimText = '';
+            return false;
+        }
         if (this.isStaleNativeChunk(finalText)) {
             this.lastPartialText = '';
             this.lastInterimText = '';
@@ -298,6 +321,9 @@ class NativeSpeechRecognizer {
         this.isStartingOrRestarting = true;
         this.startedAt = Date.now();
         try {
+            this.lastPartialText = '';
+            this.lastInterimText = '';
+            this.ignoredPhantomStart = false;
             if (isAndroidNative()) {
                 try {
                     await VoiceSettings.startAudioRouting();
