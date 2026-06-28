@@ -1,9 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
 import {
-    AlertTriangle, ArrowLeft, BellRing, Captions,
-    Check, ChevronRight, CircleHelp, ContactRound, DoorOpen, Flame,
+    AlertTriangle, ArrowLeft, BellRing, BriefcaseBusiness, Captions,
+    Check, ChevronRight, CircleHelp, ContactRound, DoorOpen, Flame, GraduationCap,
     HeartPulse, History, Languages, MessageCircle, Mic, PanelsTopLeft, Phone, Plus, Save, ShieldAlert,
-    Sparkles, Star, StopCircle, Trash2, UserRound, Volume2, X
+    Sparkles, Star, Stethoscope, StopCircle, Trash2, UserRound, UsersRound, Volume2, X
 } from 'lucide-react';
 import { getDuoSpeechRecognizer } from '../utils/speech';
 import { requestNotificationPermission, scheduleNotification } from '../utils/notifications';
@@ -22,15 +22,58 @@ const SOUND_TYPES = [
 
 const MODE_CONFIG = {
     general: {
-        title: 'Ortam Dinleme', icon: Captions, color: '#176b5b', prompt: 'Konuşmayı okunabilir canlı metne çevir',
+        title: 'Genel', icon: Captions, color: '#176b5b', prompt: 'Konuşmayı okunabilir canlı metne çevir',
         speakers: ['Konuşmacı'],
         groups: [
             { title: 'Önemli noktalar', keywords: ['önemli', 'unutmayın', 'dikkat', 'gerekli', 'zorunlu'] },
             { title: 'Tarihler ve saatler', keywords: ['bugün', 'yarın', 'haftaya', 'tarih', 'saat', 'son gün'] },
-            { title: 'Yapılacaklar', keywords: ['yapın', 'hazırlayın', 'gönderin', 'getirin', 'kontrol edin'] },
-            { title: 'Eğitim ve toplantı notları', keywords: ['ders', 'konu', 'ödev', 'sınav', 'proje', 'karar', 'görev', 'sorumlu'] },
-            { title: 'Sağlık ve resmi bilgiler', keywords: ['ilaç', 'doz', 'kontrol', 'randevu', 'belge', 'evrak', 'ücret', 'başvuru'] }
-        ]
+            { title: 'Yapılacaklar', keywords: ['yapın', 'hazırlayın', 'gönderin', 'getirin', 'kontrol edin'] }
+        ],
+        phrases: ['Tekrar eder misiniz?', 'Biraz yavaş konuşabilir misiniz?', 'Bunu yazılı olarak paylaşır mısınız?']
+    },
+    meeting: {
+        title: 'Toplantı', icon: UsersRound, color: '#316fa8', prompt: 'Kararları, görevleri ve sorumluları ayır',
+        speakers: ['Konuşmacı 1', 'Konuşmacı 2', 'Konuşmacı 3'],
+        groups: [
+            { title: 'Kararlar', keywords: ['karar', 'kararlaştır', 'onaylandı', 'kabul edildi', 'sonuç'] },
+            { title: 'Görevler', keywords: ['görev', 'yapacak', 'hazırlayacak', 'gönderecek', 'sorumlu'] },
+            { title: 'Tarihler', keywords: ['yarın', 'haftaya', 'tarih', 'son gün', 'saat', 'teslim'] },
+            { title: 'Açık konular', keywords: ['bekliyor', 'netleşmedi', 'sonra', 'tekrar görüş', 'araştır'] }
+        ],
+        phrases: ['Biraz yavaş konuşabilir misiniz?', 'Sırayla konuşabilir misiniz?', 'Kararı ve sorumlu kişiyi tekrar eder misiniz?']
+    },
+    doctor: {
+        title: 'Doktor', icon: Stethoscope, color: '#a94f68', prompt: 'Tedavi talimatlarını ve kontrol bilgilerini ayır',
+        speakers: ['Doktor', 'Hasta', 'Refakatçi'],
+        groups: [
+            { title: 'İlaçlar', keywords: ['ilaç', 'tablet', 'şurup', 'krem', 'reçete'] },
+            { title: 'Doz ve kullanım', keywords: ['mg', 'ml', 'doz', 'günde', 'sabah', 'akşam', 'aç', 'tok'] },
+            { title: 'Kontrol ve tetkikler', keywords: ['kontrol', 'randevu', 'tahlil', 'tetkik', 'film', 'kan'] },
+            { title: 'Dikkat edilmesi gerekenler', keywords: ['acil', 'alerji', 'yan etki', 'kullanmayın', 'yasak', 'risk'] }
+        ],
+        phrases: ['İlacın adını yazar mısınız?', 'Dozu ve kullanım süresini tekrar eder misiniz?', 'Kontrol tarihi nedir?']
+    },
+    school: {
+        title: 'Okul', icon: GraduationCap, color: '#7651a8', prompt: 'Ders içeriğini, ödevleri ve sınavları düzenle',
+        speakers: ['Öğretmen', 'Öğrenci', 'Diğer'],
+        groups: [
+            { title: 'Kavramlar ve tanımlar', keywords: ['tanım', 'kavram', 'demektir', 'örnek', 'formül', 'kural'] },
+            { title: 'Ödevler', keywords: ['ödev', 'teslim', 'sayfa', 'çözün', 'okuyun', 'hazırlayın'] },
+            { title: 'Sınav bilgileri', keywords: ['sınav', 'quiz', 'puan', 'soru', 'konular', 'değerlendirme'] },
+            { title: 'Önemli tarihler', keywords: ['tarih', 'yarın', 'haftaya', 'pazartesi', 'salı', 'çarşamba', 'perşembe', 'cuma'] }
+        ],
+        phrases: ['Tekrar eder misiniz?', 'Biraz yavaş konuşabilir misiniz?', 'Ödevi ve teslim tarihini tahtaya yazar mısınız?']
+    },
+    official: {
+        title: 'Resmî Görüşme', icon: BriefcaseBusiness, color: '#176b5b', prompt: 'Belge, ücret, süre ve yükümlülükleri ayır',
+        speakers: ['Görevli', 'Başvuran', 'Tercüman'],
+        groups: [
+            { title: 'Gerekli belgeler', keywords: ['belge', 'evrak', 'form', 'kimlik', 'imza', 'başvuru'] },
+            { title: 'Ücret ve ödeme', keywords: ['ücret', 'ödeme', 'euro', 'tl', 'tutar', 'harç'] },
+            { title: 'Süre ve son tarihler', keywords: ['süre', 'son gün', 'tarih', 'iş günü', 'randevu', 'teslim'] },
+            { title: 'Hak ve yükümlülükler', keywords: ['zorunlu', 'yükümlü', 'hak', 'itiraz', 'kabul', 'ret', 'taahhüt'] }
+        ],
+        phrases: ['Bunu yazılı olarak verebilir misiniz?', 'Son tarihi tekrar eder misiniz?', 'Gerekli belgelerin listesini verebilir misiniz?']
     }
 };
 
@@ -51,11 +94,6 @@ const LISTENING_REPLACEMENTS = [
     [/\btahlil\b/giu, 'tahlil']
 ];
 
-const SENTENCE_BREAK_MARKERS = [
-    'arkadaşlar', 'öncelikle', 'biraz sonra', 'şimdi', 'hazırsanız', 'bakalım',
-    'son olarak', 'diğer konu', 'burada', 'bundan sonra', 'devam edelim'
-];
-
 const cleanListeningText = (text, language = 'tr-TR') => {
     let next = correctTranscription(String(text || ''), language)
         .replace(/\s+/g, ' ')
@@ -68,109 +106,19 @@ const cleanListeningText = (text, language = 'tr-TR') => {
     return next;
 };
 
-const addListeningPunctuation = text => {
-    let next = String(text || '').replace(/\s+/g, ' ').trim();
-    SENTENCE_BREAK_MARKERS.forEach(marker => {
-        const pattern = new RegExp(`\\s+(${marker})\\b`, 'giu');
-        next = next.replace(pattern, (match, word, offset, full) => {
-            const before = full.slice(0, offset).trim();
-            if (!before || /[.!?]$/.test(before)) return ` ${word}`;
-            return `. ${word}`;
-        });
-    });
-    next = next
-        .replace(/\s+(çünkü|ama|fakat|ancak)\s+/giu, ', $1 ')
-        .replace(/\s+(ondan|o yüzden|bu yüzden)\s+/giu, '. $1 ')
-        .replace(/\s+([.!?])/g, '$1')
-        .replace(/([.!?])\s*([a-zğçşöüıi])/g, (_, punctuation, letter) => `${punctuation} ${letter.toLocaleUpperCase('tr-TR')}`);
-    return next;
-};
-
-const splitLongSentence = sentence => {
-    const words = String(sentence || '').trim().split(/\s+/).filter(Boolean);
-    if (words.length <= 26) return [sentence.trim()];
-    const chunks = [];
-    for (let index = 0; index < words.length; index += 22) {
-        const chunk = words.slice(index, index + 22).join(' ').replace(/[.!?]+$/, '');
-        chunks.push(`${chunk}.`);
-    }
-    return chunks;
-};
-
-const segmentListeningText = text => {
-    const punctuated = addListeningPunctuation(text);
-    return punctuated
-        .split(/(?<=[.!?])\s+/)
-        .flatMap(splitLongSentence)
-        .map(segment => cleanListeningText(segment))
-        .filter(Boolean);
-};
-
-const normalizeListeningPhrase = text => String(text || '')
-    .toLocaleLowerCase('tr-TR')
-    .replace(/[^\p{L}\p{N}]+/gu, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
-
-const isAmbientFillerOnly = text => {
-    const value = normalizeListeningPhrase(text);
-    return [
-        'evet',
-        'evet evet',
-        'tamam',
-        'tamam tamam',
-        'hı hı',
-        'hmm',
-        'he',
-        'ha'
-    ].includes(value);
-};
-
 const isImportantListeningText = (text, contextConfig) => {
     const value = String(text || '').toLocaleLowerCase('tr-TR');
     const contextKeywords = contextConfig.groups.flatMap(group => group.keywords);
-    const strongSignals = ['önemli', 'unutmayın', 'dikkat', 'sınav', 'ödev', 'teslim', 'son gün', 'yarın', 'haftaya', 'zorunlu'];
-    if (strongSignals.some(keyword => value.includes(keyword))) return true;
-    return contextKeywords.some(keyword => {
-        if (keyword === 'tarih') return /(teslim|son|sınav|randevu)\s+tarih|tarih(i|ini|inde|inden)/i.test(value);
-        return value.includes(keyword);
-    });
+    return [...LISTENING_IMPORTANT_HINTS, ...contextKeywords].some(keyword => value.includes(keyword));
 };
 
-const summarizeListeningLines = (lines, contextConfig = MODE_CONFIG.general) => {
+const summarizeListeningLines = lines => {
     if (!lines.length) return 'Henüz özetlenecek konuşma yok.';
-    const joined = lines.map(line => line.text).join(' ').toLocaleLowerCase('tr-TR');
-    const bullets = [];
-
-    if (/(tyt|ayt|ders|soru bankası|video ders|not)/i.test(joined)) {
-        const exams = ['TYT', 'AYT'].filter(token => joined.includes(token.toLocaleLowerCase('tr-TR'))).join(' ve ');
-        bullets.push(`${exams || 'Ders'} kaynakları ve çalışma materyalleri tanıtılıyor.`);
-    }
-    if (/(tarih|çağdaş|dünya tarihi)/i.test(joined)) {
-        bullets.push('Tarih konuları ve zor görülen bölümler üzerinde duruluyor.');
-    }
-    if (/(başlayalım|izleyeceğiz|yol|harita|plan|içeriğinden bahs)/i.test(joined)) {
-        bullets.push('Dersin işleyişi ve izlenecek yol kısaca açıklanıyor.');
-    }
-
-    contextConfig.groups.forEach(group => {
-        if (bullets.length >= 3) return;
-        const matched = group.lines?.length || lines.some(line => group.keywords.some(keyword => line.text.toLocaleLowerCase('tr-TR').includes(keyword)));
-        if (matched && !bullets.some(item => item.includes(group.title))) {
-            bullets.push(`${group.title} ile ilgili noktalar öne çıkıyor.`);
-        }
-    });
-
-    if (!bullets.length) {
-        const compact = lines
-            .slice(-4)
-            .map(line => line.text.replace(/[.!?]+$/, '').split(/\s+/).slice(0, 12).join(' '))
-            .filter(Boolean)
-            .slice(0, 2);
-        bullets.push(...compact.map(item => `${item}.`));
-    }
-
-    return bullets.slice(0, 3).map(item => `• ${item.replace(/[.!?]+$/, '')}.`).join('\n');
+    const important = lines.filter(line => line.important);
+    const source = (important.length ? important : lines).slice(-6);
+    const sentences = source.map(line => line.text.replace(/[.!?]+$/, '').trim()).filter(Boolean);
+    if (!sentences.length) return 'Konuşma metni henüz yeterince net değil.';
+    return sentences.slice(0, 4).join('. ') + '.';
 };
 
 const loadJson = (key, fallback) => {
@@ -406,14 +354,11 @@ function AmbientListeningTool({ onBack }) {
     const [saved, setSaved] = useState(false);
     const [summaryOpen, setSummaryOpen] = useState(false);
     const [summaryText, setSummaryText] = useState('');
-    const contextId = 'general';
+    const [contextId, setContextId] = useState(() => localStorage.getItem('eary_ambient_context') || 'general');
     const [language, setLanguage] = useState(() => localStorage.getItem('eary_ambient_language') || getInitialAppLanguage());
     const recognizerRef = useRef(null);
     const scrollRef = useRef(null);
     const desiredListeningRef = useRef(false);
-    const interimCommitTimerRef = useRef(null);
-    const lastCommittedSpeechRef = useRef('');
-    const latestInterimRef = useRef('');
     const contextConfig = MODE_CONFIG[contextId] || MODE_CONFIG.general;
     const keywords = [...new Set([...LISTENING_IMPORTANT_HINTS, ...contextConfig.groups.flatMap(group => group.keywords)])];
     const importantLines = captions.filter(line => line.important);
@@ -424,9 +369,9 @@ function AmbientListeningTool({ onBack }) {
 
     useEffect(() => () => {
         desiredListeningRef.current = false;
-        clearTimeout(interimCommitTimerRef.current);
         recognizerRef.current?.abort?.();
     }, []);
+    useEffect(() => localStorage.setItem('eary_ambient_context', contextId), [contextId]);
     useEffect(() => localStorage.setItem('eary_ambient_language', language), [language]);
     useEffect(() => {
         if (scrollRef.current && !summaryOpen) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
@@ -434,83 +379,41 @@ function AmbientListeningTool({ onBack }) {
 
     const appendCaption = (rawText, confidence) => {
         const now = Date.now();
-        const segments = segmentListeningText(rawText);
-        if (!segments.length) return;
+        const clean = cleanListeningText(rawText, language);
+        if (!clean) return;
+        const important = isImportantListeningText(clean, contextConfig);
         setCaptions(current => {
-            let next = [...current];
-            segments.forEach((clean, index) => {
-                const important = isImportantListeningText(clean, contextConfig);
-                const last = next[next.length - 1];
-                const startsNewThought = /^(arkadaşlar|öncelikle|biraz sonra|şimdi|son olarak|bakalım|burada)\b/i.test(clean);
-                const shouldJoin = last && now - last.timestamp < 2400 && !startsNewThought && !important && !last.important && last.text.length < 95 && clean.length < 70;
-                if (shouldJoin) {
-                    next = [...next.slice(0, -1), {
-                        ...last,
-                        text: cleanListeningText(`${last.text} ${clean}`, language),
-                        timestamp: now + index,
-                        uncertain: last.uncertain || (confidence != null && confidence < 0.62)
-                    }];
-                } else {
-                    next.push({
-                        id: now + index,
-                        text: clean,
-                        rawText: rawText.trim(),
-                        timestamp: now + index,
-                        important,
-                        uncertain: confidence != null && confidence < 0.62
-                    });
-                }
-            });
-            return next;
+            const last = current[current.length - 1];
+            const shouldJoin = last && now - last.timestamp < 4500 && !important && !last.important && clean.length < 120;
+            if (shouldJoin) {
+                const mergedText = cleanListeningText(`${last.text} ${clean}`, language);
+                return [...current.slice(0, -1), {
+                    ...last,
+                    text: mergedText,
+                    timestamp: now,
+                    uncertain: last.uncertain || (confidence != null && confidence < 0.62)
+                }];
+            }
+            return [...current, {
+                id: now,
+                text: clean,
+                rawText: rawText.trim(),
+                timestamp: now,
+                important,
+                uncertain: confidence != null && confidence < 0.62
+            }];
         });
-    };
-
-    const getSpeechDelta = (candidate, previous) => {
-        const cleanCandidate = String(candidate || '').replace(/\s+/g, ' ').trim();
-        const cleanPrevious = String(previous || '').replace(/\s+/g, ' ').trim();
-        if (!cleanCandidate) return '';
-        if (!cleanPrevious) return cleanCandidate;
-        if (cleanCandidate === cleanPrevious) return '';
-        if (cleanCandidate.startsWith(cleanPrevious)) return cleanCandidate.slice(cleanPrevious.length).trim();
-        if (cleanPrevious.includes(cleanCandidate)) return '';
-        return cleanCandidate;
-    };
-
-    const commitAmbientSpeech = (text, confidence) => {
-        const cleaned = cleanListeningText(text, language);
-        if (!cleaned || isAmbientFillerOnly(cleaned)) return;
-        const delta = getSpeechDelta(cleaned, lastCommittedSpeechRef.current);
-        if (!delta || isAmbientFillerOnly(delta)) return;
-        appendCaption(delta, confidence);
-        lastCommittedSpeechRef.current = cleaned;
-        latestInterimRef.current = '';
-        setInterim('');
     };
 
     const startListening = async () => {
         desiredListeningRef.current = true;
-        lastCommittedSpeechRef.current = '';
-        latestInterimRef.current = '';
-        clearTimeout(interimCommitTimerRef.current);
         const recognizer = getDuoSpeechRecognizer(language, (finalText, interimText, confidence) => {
-            const cleanedInterim = interimText ? cleanListeningText(interimText, language).replace(/[.!?]$/, '') : '';
-            latestInterimRef.current = cleanedInterim && !isAmbientFillerOnly(cleanedInterim) ? cleanedInterim : '';
-            setInterim(cleanedInterim && !isAmbientFillerOnly(cleanedInterim) ? cleanedInterim : '');
-            if (cleanedInterim && !isAmbientFillerOnly(cleanedInterim)) {
-                clearTimeout(interimCommitTimerRef.current);
-                interimCommitTimerRef.current = setTimeout(() => {
-                    commitAmbientSpeech(cleanedInterim, confidence);
-                }, 1200);
-            }
+            setInterim(interimText ? cleanListeningText(interimText, language).replace(/[.!?]$/, '') : '');
             if (finalText?.trim()) {
-                const cleanedFinal = cleanListeningText(finalText.trim(), language);
-                clearTimeout(interimCommitTimerRef.current);
-                commitAmbientSpeech(cleanedFinal, confidence);
+                appendCaption(finalText.trim(), confidence);
                 setInterim('');
             }
         }, () => {
-            clearTimeout(interimCommitTimerRef.current);
-            if (latestInterimRef.current && !isAmbientFillerOnly(latestInterimRef.current)) commitAmbientSpeech(latestInterimRef.current);
             setListening(false);
             if (desiredListeningRef.current) {
                 setTimeout(() => {
@@ -536,8 +439,6 @@ function AmbientListeningTool({ onBack }) {
 
     const stopListening = () => {
         desiredListeningRef.current = false;
-        clearTimeout(interimCommitTimerRef.current);
-        if (latestInterimRef.current && !isAmbientFillerOnly(latestInterimRef.current)) commitAmbientSpeech(latestInterimRef.current);
         recognizerRef.current?.stop?.();
         setListening(false);
     };
@@ -548,7 +449,7 @@ function AmbientListeningTool({ onBack }) {
     };
 
     const refreshSummary = () => {
-        setSummaryText(summarizeListeningLines(captions, contextConfig));
+        setSummaryText(summarizeListeningLines(captions));
         setSummaryOpen(true);
     };
 
@@ -580,21 +481,26 @@ function AmbientListeningTool({ onBack }) {
 
     return (
         <main className="eary-shell mx-auto flex h-screen w-full max-w-md flex-col overflow-hidden sm:h-[800px] sm:rounded-xl sm:border sm:eary-line">
-            <header className="eary-ios-safe-header flex items-center gap-2 border-b eary-line px-4 pb-2">
-                <button type="button" onClick={onBack} className="eary-soft eary-muted flex h-9 w-9 items-center justify-center rounded-lg"><ArrowLeft size={19} /></button>
-                <span className="eary-brand-bg flex h-9 w-9 items-center justify-center rounded-lg"><Captions size={18} /></span>
+            <header className="eary-ios-safe-header flex items-center gap-3 border-b eary-line px-4 pb-3">
+                <button type="button" onClick={onBack} className="eary-soft eary-muted flex h-10 w-10 items-center justify-center rounded-lg"><ArrowLeft size={20} /></button>
+                <span className="eary-brand-bg flex h-10 w-10 items-center justify-center rounded-lg"><Captions size={20} /></span>
                 <div className="min-w-0 flex-1">
-                    <h1 className="truncate text-base font-bold">Ortam Dinleme</h1>
-                    <p className="eary-muted truncate text-[9px]">Canlı metin, özet ve önemli notlar</p>
+                    <h1 className="font-bold">Ortam Dinleme</h1>
+                    <p className="eary-muted truncate text-[10px]">Canlı metin, anlam düzeltme, özet ve önemli notlar</p>
                 </div>
-                <button onClick={refreshSummary} disabled={!captions.length} className={`flex h-9 w-9 items-center justify-center rounded-lg disabled:opacity-30 ${summaryOpen ? 'eary-brand-bg' : 'eary-soft eary-brand'}`} title="Özetle"><Sparkles size={17}/></button>
-                <button onClick={saveSession} disabled={!captions.length} className="eary-soft eary-brand flex h-9 w-9 items-center justify-center rounded-lg disabled:opacity-30" title="Oturumu kaydet">{saved ? <Check size={17}/> : <Save size={17}/>}</button>
+                <button onClick={refreshSummary} disabled={!captions.length} className={`flex h-10 w-10 items-center justify-center rounded-lg disabled:opacity-30 ${summaryOpen ? 'eary-brand-bg' : 'eary-soft eary-brand'}`} title="Özetle"><Sparkles size={18}/></button>
+                <button onClick={saveSession} disabled={!captions.length} className="eary-soft eary-brand flex h-10 w-10 items-center justify-center rounded-lg disabled:opacity-30" title="Oturumu kaydet">{saved ? <Check size={18}/> : <Save size={18}/>}</button>
             </header>
 
-            <section className="border-b eary-line px-4 py-2">
+            <section className="grid grid-cols-2 gap-2 border-b eary-line px-4 py-3">
                 <label className="block text-[10px] font-black uppercase eary-muted">Konuşma dili
-                    <select value={language} onChange={event => setLanguage(event.target.value)} disabled={listening} className="eary-input mt-1 w-full rounded-lg border px-2 py-1.5 text-xs font-bold normal-case disabled:opacity-60">
+                    <select value={language} onChange={event => setLanguage(event.target.value)} disabled={listening} className="eary-input mt-1 w-full rounded-lg border px-2 py-2 text-xs font-bold normal-case disabled:opacity-60">
                         {SUPPORTED_LANGUAGES.map(item => <option key={item.code} value={item.code}>{item.nativeLabel}</option>)}
+                    </select>
+                </label>
+                <label className="block text-[10px] font-black uppercase eary-muted">Bağlam
+                    <select value={contextId} onChange={event => setContextId(event.target.value)} className="eary-input mt-1 w-full rounded-lg border px-2 py-2 text-xs font-bold normal-case">
+                        {Object.entries(MODE_CONFIG).map(([id, config]) => <option key={id} value={id}>{config.title}</option>)}
                     </select>
                 </label>
             </section>
@@ -608,7 +514,7 @@ function AmbientListeningTool({ onBack }) {
                         </div>
                         <article className="rounded-lg border border-emerald-200 bg-emerald-50 p-3">
                             <h3 className="text-sm font-bold text-emerald-900">Kısa özet</h3>
-                            <p className="mt-2 whitespace-pre-line text-sm leading-6 text-emerald-950">{summaryText || summarizeListeningLines(captions, contextConfig)}</p>
+                            <p className="mt-2 text-sm leading-6 text-emerald-950">{summaryText || summarizeListeningLines(captions)}</p>
                         </article>
                         <article className="rounded-lg border border-amber-200 bg-amber-50 p-3">
                             <h3 className="text-sm font-bold text-amber-900">Önemli notlar</h3>
@@ -624,12 +530,8 @@ function AmbientListeningTool({ onBack }) {
                 ) : captions.length === 0 && !interim ? (
                     <div className="flex h-full flex-col items-center justify-center text-center">
                         <Captions size={36} className="eary-brand"/>
-                        <h2 className="mt-3 font-bold">{listening ? 'Konuşma bekleniyor' : 'Canlı altyazı hazır'}</h2>
-                        <p className="eary-muted mt-1 max-w-xs text-xs leading-5">
-                            {listening
-                                ? 'Konuşma algılandığında burada görünecek. Boş veya hatalı kısa sonuçlar metne eklenmez.'
-                                : 'Telefonu veya yaka mikrofonunu konuşan kişiye yaklaştırın. Mikrofon açık kaldığı sürece metin okunabilir paragraflara ayrılır.'}
-                        </p>
+                        <h2 className="mt-3 font-bold">Canlı altyazı hazır</h2>
+                        <p className="eary-muted mt-1 max-w-xs text-xs leading-5">Telefonu veya yaka mikrofonunu konuşan kişiye yaklaştırın. Mikrofon açık kaldığı sürece metin okunabilir paragraflara ayrılır.</p>
                     </div>
                 ) : (
                     <div className="space-y-3">
@@ -643,12 +545,7 @@ function AmbientListeningTool({ onBack }) {
                                     </span>
                                 </div>
                                 <p className={`text-[15px] font-semibold leading-7 ${line.uncertain ? 'decoration-rose-500 decoration-wavy underline' : ''}`}>{renderHighlighted(line.text)}</p>
-                                {line.rawText && line.rawText !== line.text && line.uncertain && (
-                                    <details className="eary-muted mt-2 text-[9px]">
-                                        <summary className="cursor-pointer font-bold">Ham metni göster</summary>
-                                        <p className="mt-1 leading-4">{line.rawText}</p>
-                                    </details>
-                                )}
+                                {line.rawText && line.rawText !== line.text && <p className="eary-muted mt-2 text-[9px]">Düzeltilmiş metin · Ham: {line.rawText}</p>}
                             </article>
                         ))}
                         {interim && <div className="rounded-lg border border-dashed eary-line p-3 text-sm italic eary-muted">{interim}</div>}
@@ -656,13 +553,16 @@ function AmbientListeningTool({ onBack }) {
                 )}
             </div>
 
-            <div className="border-t eary-line bg-[var(--surface)] px-4 py-2">
-                <div className="flex items-center justify-between gap-3">
+            <div className="border-t eary-line bg-[var(--surface)] px-3 py-3">
+                <div className="mb-3 flex items-center justify-between gap-2">
                     <div className="min-w-0">
-                        <p className="text-xs font-bold">{listening ? 'Dinleme açık' : 'Dinleme kapalı'}</p>
-                        <p className="eary-muted truncate text-[10px]">{getLanguageLabel(language)}</p>
+                        <p className="text-xs font-bold">{listening ? 'Mikrofon açık' : 'Mikrofon kapalı'}</p>
+                        <p className="eary-muted truncate text-[10px]">{getLanguageLabel(language)} · {contextConfig.title} bağlamı</p>
                     </div>
                     <button type="button" onClick={toggleListening} className={`flex h-12 w-12 shrink-0 items-center justify-center rounded-full text-white shadow-lg ${listening ? 'bg-rose-600' : 'eary-brand-bg'}`}>{listening ? <StopCircle size={24}/> : <Mic size={24}/>}</button>
+                </div>
+                <div className="flex gap-2 overflow-x-auto">
+                    {contextConfig.phrases.map(phrase => <button key={phrase} onClick={() => speakTurkish(phrase)} className="eary-soft eary-brand shrink-0 rounded-full px-3 py-2 text-[10px] font-bold">{phrase}</button>)}
                 </div>
             </div>
         </main>

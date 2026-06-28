@@ -22,14 +22,6 @@ const isRecoverableNativeSpeechError = error => {
         .some(token => value.includes(token));
 };
 
-const normalizeSpeechChunk = text => String(text || '')
-    .toLocaleLowerCase('tr-TR')
-    .replace(/[^\p{L}\p{N}]+/gu, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
-
-const isAndroidNative = () => Capacitor.getPlatform() === 'android';
-
 class WebSpeechRecognizer {
     constructor(language, onResult, onEnd, onError) {
         const SpeechRecognitionClass = window.SpeechRecognition || window.webkitSpeechRecognition;
@@ -105,13 +97,12 @@ class WebSpeechRecognizer {
 }
 
 class NativeSpeechRecognizer {
-    constructor(language, onResult, onEnd, onError, options = {}) {
+    constructor(language, onResult, onEnd, onError) {
         this.supported = true;
         this.language = language;
         this.onResult = onResult;
         this.onEnd = onEnd;
         this.onError = onError;
-        this.mode = options.mode || 'default';
         this.listener = null;
         this.stateListener = null;
         this.errorListener = null;
@@ -121,21 +112,16 @@ class NativeSpeechRecognizer {
         this.restartTimer = null;
         this.startedAt = 0;
         this.useOnDeviceRecognition = false;
-        this.lastInterimText = '';
-        this.lastFinalText = '';
-        this.lastFinalAt = 0;
-        this.useNativeContinuousPTT = true;
     }
 
     async start() {
         if (this.isListening || this.isStartingOrRestarting) return;
         try {
-            if (isAndroidNative()) {
-                try {
-                    await VoiceSettings.startAudioRouting();
-                } catch (e) {
-                    console.error("Failed to start audio routing:", e);
-                }
+            // Call native audio routing configuration
+            try {
+                await VoiceSettings.startAudioRouting();
+            } catch (e) {
+                console.error("Failed to start audio routing:", e);
             }
 
             // 1. Verify and request Android native microphone permissions
@@ -154,7 +140,6 @@ class NativeSpeechRecognizer {
 
             this.isListening = true;
             this.lastPartialText = '';
-            this.lastInterimText = '';
             this.isStartingOrRestarting = true;
             this.startedAt = Date.now();
 
@@ -163,20 +148,9 @@ class NativeSpeechRecognizer {
             // 2. Register listener for native partial transcription updates
             this.listener = await SpeechRecognition.addListener("partialResults", (data) => {
                 if (data && data.matches && data.matches.length > 0) {
-                    const text = String(data.matches[0] || '').trim();
-                    if (!text) return;
-
-                    const isSegmentFinal = Boolean(data.isRestarting || data.forced);
-                    if (isSegmentFinal) {
-                        this.finalizeNativeChunk(text);
-                        return;
-                    }
-
-                    if (this.isStaleNativeChunk(text)) return;
-                    if (text === this.lastInterimText) return;
-
+                    const text = data.matches[0];
                     this.lastPartialText = text;
-                    this.lastInterimText = text;
+                    // Treat matches[0] as interim preview text
                     this.onResult("", text);
                 }
             });
@@ -187,14 +161,12 @@ class NativeSpeechRecognizer {
                     this.isStartingOrRestarting = false;
                 }
                 if (data && data.state === "stopped" && this.isListening) {
-                    if (Capacitor.getPlatform() === 'ios' && data.reason === 'results' && this.useNativeContinuousPTT) {
-                        this.lastPartialText = '';
-                        this.lastInterimText = '';
+                    if (Capacitor.getPlatform() === 'ios') {
+                        this.isListening = false;
                         this.isStartingOrRestarting = false;
+                        this.onEnd();
                         return;
                     }
-                    this.finalizeNativeChunk(this.lastPartialText);
-                    this.isStartingOrRestarting = false;
                     this.scheduleRestart();
                 }
             });
@@ -204,8 +176,13 @@ class NativeSpeechRecognizer {
                 console.error("Native SpeechRecognition Error Event:", data);
                 if (this.isListening) {
                     const errorMsg = data.message || data.error || "";
-                    if (isRecoverableNativeSpeechError(data)) {
+                    if (Capacitor.getPlatform() === 'ios') {
+                        this.isListening = false;
                         this.isStartingOrRestarting = false;
+                        this.onError(errorMsg || "Speech Recognition Error");
+                        return;
+                    }
+                    if (isRecoverableNativeSpeechError(data)) {
                         this.scheduleRestart();
                         return;
                     }
@@ -235,14 +212,18 @@ class NativeSpeechRecognizer {
                 popup: false,
                 addPunctuation: true,
                 allowForSilence: 3000,
-                continuousPTT: this.useNativeContinuousPTT,
+                continuousPTT: Capacitor.getPlatform() !== 'ios',
                 useOnDeviceRecognition
             });
-            this.isStartingOrRestarting = false;
 
         } catch (err) {
             this.isStartingOrRestarting = false;
             if (this.isListening) {
+                if (Capacitor.getPlatform() === 'ios') {
+                    this.isListening = false;
+                    this.onError(err);
+                    return;
+                }
                 if (isRecoverableNativeSpeechError(err)) {
                     this.scheduleRestart();
                     return;
@@ -251,33 +232,6 @@ class NativeSpeechRecognizer {
                 this.onError(err);
             }
         }
-    }
-
-    isStaleNativeChunk(text) {
-        const normalizedText = normalizeSpeechChunk(text);
-        const normalizedFinal = normalizeSpeechChunk(this.lastFinalText);
-        return Boolean(
-            normalizedText &&
-            normalizedFinal &&
-            normalizedText === normalizedFinal &&
-            Date.now() - this.lastFinalAt < 4000
-        );
-    }
-
-    finalizeNativeChunk(text) {
-        const finalText = String(text || '').trim();
-        if (!finalText) return false;
-        if (this.isStaleNativeChunk(finalText)) {
-            this.lastPartialText = '';
-            this.lastInterimText = '';
-            return false;
-        }
-        this.lastFinalText = finalText;
-        this.lastFinalAt = Date.now();
-        this.lastPartialText = '';
-        this.lastInterimText = '';
-        this.onResult(finalText, "");
-        return true;
     }
 
     scheduleRestart() {
@@ -298,16 +252,18 @@ class NativeSpeechRecognizer {
         this.isStartingOrRestarting = true;
         this.startedAt = Date.now();
         try {
-            if (isAndroidNative()) {
-                try {
-                    await VoiceSettings.startAudioRouting();
-                } catch (errRoute) {
-                    console.error("Failed to start audio routing on restart:", errRoute);
-                }
+            // Re-apply audio routing configuration on restart
+            try {
+                await VoiceSettings.startAudioRouting();
+            } catch (errRoute) {
+                console.error("Failed to start audio routing on restart:", errRoute);
             }
 
             // Finalize the last partial text if any
-            this.finalizeNativeChunk(this.lastPartialText);
+            if (this.lastPartialText.trim()) {
+                this.onResult(this.lastPartialText.trim(), "");
+                this.lastPartialText = '';
+            }
             
             // Restart native Speech Recognition silently
             await SpeechRecognition.start({
@@ -317,10 +273,9 @@ class NativeSpeechRecognizer {
                 popup: false,
                 addPunctuation: true,
                 allowForSilence: 3000,
-                continuousPTT: this.useNativeContinuousPTT,
+                continuousPTT: Capacitor.getPlatform() !== 'ios',
                 useOnDeviceRecognition: this.useOnDeviceRecognition
             });
-            this.isStartingOrRestarting = false;
         } catch (e) {
             console.error("Error restarting speech recognition:", e);
             this.isStartingOrRestarting = false;
@@ -341,19 +296,19 @@ class NativeSpeechRecognizer {
             const cached = await SpeechRecognition.getLastPartialResult();
             await SpeechRecognition.forceStop({ timeout: 1000 });
             const finalText = String(cached?.text || this.lastPartialText || '').trim();
-            this.finalizeNativeChunk(finalText);
+            if (finalText) this.onResult(finalText, "");
         } catch (e) {
             console.error("Error stopping Speech Recognition:", e);
             // Fallback in case of error
-            this.finalizeNativeChunk(this.lastPartialText);
+            if (this.lastPartialText.trim()) {
+                this.onResult(this.lastPartialText.trim(), "");
+            }
         }
 
-        if (isAndroidNative()) {
-            try {
-                await VoiceSettings.stopAudioRouting();
-            } catch (e) {
-                console.error("Failed to stop audio routing:", e);
-            }
+        try {
+            await VoiceSettings.stopAudioRouting();
+        } catch (e) {
+            console.error("Failed to stop audio routing:", e);
         }
 
         await this.removeListeners();
@@ -395,14 +350,13 @@ class NativeSpeechRecognizer {
 
     restart() {
         this.lastPartialText = '';
-        this.lastInterimText = '';
         this.restartListening();
     }
 }
 
-export const getDuoSpeechRecognizer = (language, onResult, onEnd, onError, options = {}) => {
+export const getDuoSpeechRecognizer = (language, onResult, onEnd, onError) => {
     if (Capacitor.isNativePlatform()) {
-        return new NativeSpeechRecognizer(language, onResult, onEnd, onError, options);
+        return new NativeSpeechRecognizer(language, onResult, onEnd, onError);
     } else {
         return new WebSpeechRecognizer(language, onResult, onEnd, onError);
     }
