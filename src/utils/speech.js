@@ -137,6 +137,7 @@ class NativeSpeechRecognizer {
         this.isListening = false;
         this.isEnding = false;
         this.lastInterimText = '';
+        this.lastEmittedText = '';
         this.listeners = [];
     }
 
@@ -179,6 +180,7 @@ class NativeSpeechRecognizer {
         this.isListening = true;
         this.isEnding = false;
         this.lastInterimText = '';
+        this.lastEmittedText = '';
         const sessionId = this.sessionId;
 
         try {
@@ -189,6 +191,8 @@ class NativeSpeechRecognizer {
                 if (!this.isCurrent(sessionId)) return;
                 const text = String(data?.matches?.[0] || '').trim();
                 if (!text) return;
+                if (text === this.lastEmittedText && data?.isFinal) return;
+                this.lastEmittedText = text;
 
                 if (data?.isFinal) {
                     this.lastInterimText = '';
@@ -246,6 +250,7 @@ class NativeSpeechRecognizer {
 
         await this.clearListeners();
         this.lastInterimText = '';
+        this.lastEmittedText = '';
         this.isEnding = false;
 
         if (wasListening && notifyEnd) this.onEnd();

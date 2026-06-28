@@ -84,7 +84,7 @@ public class EarySpeechPlugin extends Plugin {
     @PluginMethod
     public void stop(PluginCall call) {
         mainHandler.post(() -> {
-            stopListening("userStop", true);
+            stopListening("userStop", false);
             call.resolve();
         });
     }

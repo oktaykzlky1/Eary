@@ -25,6 +25,9 @@ public final class EarySpeechPlugin: CAPPlugin, CAPBridgedPlugin {
     private var lastTranscript: String = ""
     private var hasInstalledTap = false
     private var isActive = false
+    private var audioBufferCount = 0
+    private var audioPeakRMS: Float = 0
+    private var hasUsableAudio = false
 
     public override init() {
         super.init()
@@ -64,7 +67,7 @@ public final class EarySpeechPlugin: CAPPlugin, CAPBridgedPlugin {
 
     @objc func stop(_ call: CAPPluginCall) {
         DispatchQueue.main.async {
-            self.finishSession(reason: "userStop", emitFinal: true)
+            self.finishSession(reason: "userStop", emitFinal: false)
             call.resolve()
         }
     }
@@ -101,13 +104,18 @@ public final class EarySpeechPlugin: CAPPlugin, CAPBridgedPlugin {
         nextSessionId += 1
         activeSessionId = sessionId
         lastTranscript = ""
+        audioBufferCount = 0
+        audioPeakRMS = 0
+        hasUsableAudio = false
         isActive = true
         speechRecognizer = recognizer
         recognitionRequest = request
 
         do {
             let audioSession = AVAudioSession.sharedInstance()
-            try audioSession.setCategory(.playAndRecord, mode: .measurement, options: [.duckOthers, .defaultToSpeaker, .allowBluetooth])
+            try audioSession.setCategory(.record, mode: .measurement, options: [.duckOthers, .allowBluetooth])
+            try audioSession.setPreferredSampleRate(44_100)
+            try audioSession.setPreferredIOBufferDuration(0.02)
             try audioSession.setActive(true, options: .notifyOthersOnDeactivation)
 
             let inputNode = audioEngine.inputNode
@@ -125,6 +133,7 @@ public final class EarySpeechPlugin: CAPPlugin, CAPBridgedPlugin {
 
             inputNode.installTap(onBus: 0, bufferSize: 1024, format: format) { [weak self] buffer, _ in
                 guard let self, self.activeSessionId == sessionId else { return }
+                self.trackAudioEnergy(buffer)
                 self.recognitionRequest?.append(buffer)
             }
             hasInstalledTap = true
@@ -137,6 +146,10 @@ public final class EarySpeechPlugin: CAPPlugin, CAPBridgedPlugin {
                     if let result {
                         let text = result.bestTranscription.formattedString.trimmingCharacters(in: .whitespacesAndNewlines)
                         if !text.isEmpty, text != self.lastTranscript {
+                            guard self.hasUsableAudio else {
+                                print("[EarySpeech] Dropped speech result without usable microphone input. text=\(text) buffers=\(self.audioBufferCount) peakRMS=\(self.audioPeakRMS)")
+                                return
+                            }
                             self.lastTranscript = text
                             self.notifyListeners("partialResults", data: [
                                 "matches": [text],
@@ -207,6 +220,9 @@ public final class EarySpeechPlugin: CAPPlugin, CAPBridgedPlugin {
 
         activeSessionId = 0
         lastTranscript = ""
+        audioBufferCount = 0
+        audioPeakRMS = 0
+        hasUsableAudio = false
         isActive = false
 
         notifyListeners("listeningState", data: [
@@ -251,5 +267,34 @@ public final class EarySpeechPlugin: CAPPlugin, CAPBridgedPlugin {
 
     private func normalizeLanguage(_ language: String) -> String {
         language.replacingOccurrences(of: "_", with: "-")
+    }
+
+    private func trackAudioEnergy(_ buffer: AVAudioPCMBuffer) {
+        audioBufferCount += 1
+
+        guard let channelData = buffer.floatChannelData else { return }
+        let channelCount = Int(buffer.format.channelCount)
+        let frameLength = Int(buffer.frameLength)
+        guard channelCount > 0, frameLength > 0 else { return }
+
+        var sum: Float = 0
+        var sampleCount = 0
+
+        for channel in 0..<channelCount {
+            let samples = channelData[channel]
+            for frame in 0..<frameLength {
+                let sample = samples[frame]
+                sum += sample * sample
+                sampleCount += 1
+            }
+        }
+
+        guard sampleCount > 0 else { return }
+        let rms = sqrt(sum / Float(sampleCount))
+        audioPeakRMS = max(audioPeakRMS, rms)
+
+        if rms > 0.0015 || audioPeakRMS > 0.002 {
+            hasUsableAudio = true
+        }
     }
 }
