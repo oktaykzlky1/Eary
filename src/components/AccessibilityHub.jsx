@@ -411,6 +411,9 @@ function AmbientListeningTool({ onBack }) {
     const recognizerRef = useRef(null);
     const scrollRef = useRef(null);
     const desiredListeningRef = useRef(false);
+    const interimCommitTimerRef = useRef(null);
+    const lastCommittedSpeechRef = useRef('');
+    const latestInterimRef = useRef('');
     const contextConfig = MODE_CONFIG[contextId] || MODE_CONFIG.general;
     const keywords = [...new Set([...LISTENING_IMPORTANT_HINTS, ...contextConfig.groups.flatMap(group => group.keywords)])];
     const importantLines = captions.filter(line => line.important);
@@ -421,6 +424,7 @@ function AmbientListeningTool({ onBack }) {
 
     useEffect(() => () => {
         desiredListeningRef.current = false;
+        clearTimeout(interimCommitTimerRef.current);
         recognizerRef.current?.abort?.();
     }, []);
     useEffect(() => localStorage.setItem('eary_ambient_language', language), [language]);
@@ -461,17 +465,52 @@ function AmbientListeningTool({ onBack }) {
         });
     };
 
+    const getSpeechDelta = (candidate, previous) => {
+        const cleanCandidate = String(candidate || '').replace(/\s+/g, ' ').trim();
+        const cleanPrevious = String(previous || '').replace(/\s+/g, ' ').trim();
+        if (!cleanCandidate) return '';
+        if (!cleanPrevious) return cleanCandidate;
+        if (cleanCandidate === cleanPrevious) return '';
+        if (cleanCandidate.startsWith(cleanPrevious)) return cleanCandidate.slice(cleanPrevious.length).trim();
+        if (cleanPrevious.includes(cleanCandidate)) return '';
+        return cleanCandidate;
+    };
+
+    const commitAmbientSpeech = (text, confidence) => {
+        const cleaned = cleanListeningText(text, language);
+        if (!cleaned || isAmbientFillerOnly(cleaned)) return;
+        const delta = getSpeechDelta(cleaned, lastCommittedSpeechRef.current);
+        if (!delta || isAmbientFillerOnly(delta)) return;
+        appendCaption(delta, confidence);
+        lastCommittedSpeechRef.current = cleaned;
+        latestInterimRef.current = '';
+        setInterim('');
+    };
+
     const startListening = async () => {
         desiredListeningRef.current = true;
+        lastCommittedSpeechRef.current = '';
+        latestInterimRef.current = '';
+        clearTimeout(interimCommitTimerRef.current);
         const recognizer = getDuoSpeechRecognizer(language, (finalText, interimText, confidence) => {
             const cleanedInterim = interimText ? cleanListeningText(interimText, language).replace(/[.!?]$/, '') : '';
+            latestInterimRef.current = cleanedInterim && !isAmbientFillerOnly(cleanedInterim) ? cleanedInterim : '';
             setInterim(cleanedInterim && !isAmbientFillerOnly(cleanedInterim) ? cleanedInterim : '');
+            if (cleanedInterim && !isAmbientFillerOnly(cleanedInterim)) {
+                clearTimeout(interimCommitTimerRef.current);
+                interimCommitTimerRef.current = setTimeout(() => {
+                    commitAmbientSpeech(cleanedInterim, confidence);
+                }, 1200);
+            }
             if (finalText?.trim()) {
                 const cleanedFinal = cleanListeningText(finalText.trim(), language);
-                if (!isAmbientFillerOnly(cleanedFinal)) appendCaption(finalText.trim(), confidence);
+                clearTimeout(interimCommitTimerRef.current);
+                commitAmbientSpeech(cleanedFinal, confidence);
                 setInterim('');
             }
         }, () => {
+            clearTimeout(interimCommitTimerRef.current);
+            if (latestInterimRef.current && !isAmbientFillerOnly(latestInterimRef.current)) commitAmbientSpeech(latestInterimRef.current);
             setListening(false);
             if (desiredListeningRef.current) {
                 setTimeout(() => {
@@ -483,7 +522,7 @@ function AmbientListeningTool({ onBack }) {
             setListening(false);
             setInterim(String(error?.message || 'Mikrofon başlatılamadı'));
             setTimeout(() => setInterim(''), 2400);
-        }, { mode: 'ambient' });
+        });
         recognizerRef.current = recognizer;
         try {
             await recognizer.start();
@@ -497,6 +536,8 @@ function AmbientListeningTool({ onBack }) {
 
     const stopListening = () => {
         desiredListeningRef.current = false;
+        clearTimeout(interimCommitTimerRef.current);
+        if (latestInterimRef.current && !isAmbientFillerOnly(latestInterimRef.current)) commitAmbientSpeech(latestInterimRef.current);
         recognizerRef.current?.stop?.();
         setListening(false);
     };
