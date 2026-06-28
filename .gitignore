@@ -1,0 +1,53 @@
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+node_modules
+dist
+dist-ssr
+*.local
+
+# Capacitor / Android / iOS build outputs
+android/.gradle/
+android/build/
+android/app/build/
+android/capacitor-cordova-android-plugins/build/
+ios/App/build/
+DerivedData/
+
+# Firebase deploy cache
+.firebase/
+
+# Local package/cache artifacts
+.npm-cache/
+*.zip
+*.apk
+*.aab
+
+# Signing keys should never be committed
+*.keystore
+*.jks
+*.p12
+*.mobileprovision
+
+# Editor directories and files
+.vscode/*
+!.vscode/extensions.json
+.idea
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# iOS generated build output
+ios/build/
+
+# Local debug logs
+firepit-log.txt

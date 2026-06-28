@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">Eary</string>
+    <string name="title_activity_main">Eary</string>
+    <string name="package_name">com.asleyduo.app</string>
+    <string name="custom_url_scheme">com.asleyduo.app</string>
+</resources>

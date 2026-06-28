@@ -1,0 +1,168 @@
+@import url('https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  font-family: 'Outfit', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif;
+  color-scheme: light;
+  --app-bg: #eef2f1;
+  --surface: #ffffff;
+  --surface-soft: #f4f7f6;
+  --surface-hover: #eaf0ee;
+  --text: #17221f;
+  --muted: #71807b;
+  --line: #dce5e2;
+  --brand: #176b5b;
+  --brand-strong: #0f594c;
+  --brand-soft: #dceee9;
+  --incoming: #ffffff;
+  --outgoing: #dff3e7;
+  --danger: #c83e54;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  background: var(--app-bg);
+  color: var(--text);
+  letter-spacing: 0;
+}
+
+:root[data-theme='dark'] {
+  color-scheme: dark;
+  --app-bg: #0e1514;
+  --surface: #16201e;
+  --surface-soft: #1c2926;
+  --surface-hover: #24332f;
+  --text: #edf5f2;
+  --muted: #9baca7;
+  --line: #2a3a36;
+  --brand: #54b99f;
+  --brand-strong: #74cbb5;
+  --brand-soft: #203d36;
+  --incoming: #1b2724;
+  --outgoing: #21463b;
+  --danger: #ff7588;
+}
+
+.eary-app {
+  background: var(--app-bg);
+  color: var(--text);
+}
+
+.eary-shell { background: var(--surface); color: var(--text); }
+.eary-soft { background: var(--surface-soft); }
+.eary-line { border-color: var(--line); }
+.eary-muted { color: var(--muted); }
+.eary-brand { color: var(--brand); }
+.eary-brand-bg { background: var(--brand); color: #fff; }
+.eary-brand-soft { background: var(--brand-soft); color: var(--brand); }
+.eary-input {
+  background: var(--surface-soft);
+  color: var(--text);
+  border-color: var(--line);
+}
+.eary-input::placeholder { color: var(--muted); }
+.eary-input:focus { border-color: var(--brand); outline: none; }
+.eary-row:hover { background: var(--surface-hover); }
+.eary-incoming { background: var(--incoming); color: var(--text); }
+.eary-outgoing { background: var(--outgoing); color: var(--text); }
+.eary-ios-safe-header {
+  padding-top: 64px;
+  padding-top: max(64px, calc(env(safe-area-inset-top) + 12px));
+}
+
+.eary-chat-safe-header {
+  padding-top: 76px;
+  padding-top: max(76px, calc(env(safe-area-inset-top) + 28px));
+}
+
+@supports (padding-top: constant(safe-area-inset-top)) {
+  .eary-ios-safe-header {
+    padding-top: max(64px, calc(constant(safe-area-inset-top) + 12px));
+  }
+  .eary-chat-safe-header {
+    padding-top: max(76px, calc(constant(safe-area-inset-top) + 28px));
+  }
+}
+
+@media (min-width: 640px) {
+  .eary-ios-safe-header {
+    padding-top: 0.75rem;
+  }
+  .eary-chat-safe-header {
+    padding-top: 0.75rem;
+  }
+}
+
+:root[data-theme='dark'] .bg-white,
+:root[data-theme='dark'] [class*="bg-[#FAF8F5]"],
+:root[data-theme='dark'] [class*="bg-[#F7F3FA]"] { background-color: var(--surface) !important; }
+:root[data-theme='dark'] [class*="bg-[#D9FDD3]"] { background-color: var(--outgoing) !important; }
+:root[data-theme='dark'] [class*="text-[#2D1F47]"],
+:root[data-theme='dark'] [class*="text-[#17351F]"] { color: var(--text) !important; }
+:root[data-theme='dark'] [class*="text-[#8A7E9F]"],
+:root[data-theme='dark'] [class*="text-[#4B3E63]"] { color: var(--muted) !important; }
+:root[data-theme='dark'] [class*="border-[#DCD0EC]"],
+:root[data-theme='dark'] [class*="border-[#E6DFF0]"] { border-color: var(--line) !important; }
+
+button, input, select, textarea { font: inherit; letter-spacing: 0; }
+button { -webkit-tap-highlight-color: transparent; }
+
+@media (max-width: 640px) {
+  body { overflow: hidden; }
+}
+
+/* Custom scrollbars for a premium look */
+::-webkit-scrollbar {
+  width: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--line);
+  border-radius: 9999px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--muted);
+}
+
+/* Sidebar and Modal Custom Animations */
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes slideRight {
+  from { transform: translateX(-100%); }
+  to { transform: translateX(0); }
+}
+
+@keyframes scaleUp {
+  from { transform: scale(0.95); opacity: 0; }
+  to { transform: scale(1); opacity: 1; }
+}
+
+@keyframes slideUpFade {
+  from { transform: translateY(12px); opacity: 0; }
+  to { transform: translateY(0); opacity: 1; }
+}
+
+.animate-fadeIn {
+  animation: fadeIn 0.2s ease-out forwards;
+}
+
+.animate-slideRight {
+  animation: slideRight 0.3s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+.animate-scaleUp {
+  animation: scaleUp 0.25s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
+}
+
+.animate-slideIn {
+  animation: slideUpFade 0.22s ease-out forwards;
+}
