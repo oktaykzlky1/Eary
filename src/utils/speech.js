@@ -124,7 +124,7 @@ class NativeSpeechRecognizer {
         this.lastInterimText = '';
         this.lastFinalText = '';
         this.lastFinalAt = 0;
-        this.useNativeContinuousPTT = !(Capacitor.getPlatform() === 'ios' && this.mode === 'ambient');
+        this.useNativeContinuousPTT = true;
     }
 
     async start() {
