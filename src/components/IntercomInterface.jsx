@@ -1198,8 +1198,8 @@ export default function IntercomInterface({ roomData, onLeave, language = 'tr-TR
                 // Check for new messages to trigger local notifications
                 if (hasInitiated.current && messageList.length > messagesLengthRef.current) {
                     const newMsg = messageList[messageList.length - 1];
-                    // Verify if app is backgrounded or alwaysNotify is active, and the message is from someone else
-                    if (!Capacitor.isNativePlatform() && isAppBackground.current && newMsg.senderName !== nickname) {
+                    // Notify for incoming messages when the app is backgrounded, or when the user explicitly wants all alerts.
+                    if (newMsg.senderName !== nickname && (isAppBackground.current || alwaysNotify)) {
                         scheduleNotification(
                             `${text.newMessage}${newMsg.senderName}`,
                             newMsg.text || (newMsg.mediaType === 'video' ? 'Video gönderdi' : 'Fotoğraf gönderdi'),
@@ -1258,7 +1258,7 @@ export default function IntercomInterface({ roomData, onLeave, language = 'tr-TR
             unsubscribe();
             clearInterval(refreshInterval);
         };
-    }, [isTestBotRoom, roomId, nickname, text.newMessage, messageLimit, speechLang, currentDeviceId, currentUsername, account?.profile?.privacy?.readReceipts]);
+    }, [isTestBotRoom, roomId, nickname, text.newMessage, messageLimit, speechLang, currentDeviceId, currentUsername, alwaysNotify, account?.profile?.privacy?.readReceipts]);
 
     // Scroll to bottom on new message
     useEffect(() => {
@@ -2074,12 +2074,14 @@ export default function IntercomInterface({ roomData, onLeave, language = 'tr-TR
         ));
 
         if (allowedFiles.length === 0) {
-            alert('Seçilen kamera dosyası okunamadı. Lütfen tekrar deneyin.');
+            setToast('Seçilen kamera dosyası okunamadı');
+            setTimeout(() => setToast(''), 2200);
             return;
         }
 
         if (allowedFiles.some(file => file.size > 25 * 1024 * 1024)) {
-            alert('Fotoğraf veya video en fazla 25 MB olabilir.');
+            setToast('Fotoğraf veya video en fazla 25 MB olabilir');
+            setTimeout(() => setToast(''), 2200);
             return;
         }
 
@@ -2094,7 +2096,11 @@ export default function IntercomInterface({ roomData, onLeave, language = 'tr-TR
             setTimeout(() => setToast(''), 1800);
         } catch (error) {
             console.error('Media upload failed:', error);
-            alert('Medya gönderilemedi. Firebase Storage izinlerini kontrol edin.');
+            const message = error?.message?.includes('çok büyük')
+                ? error.message
+                : 'Medya gönderilemedi. Storage iznini kontrol edin.';
+            setToast(message);
+            setTimeout(() => setToast(''), 2800);
         } finally {
             setIsUploadingMedia(false);
             setUploadProgress(0);
@@ -2155,6 +2161,8 @@ export default function IntercomInterface({ roomData, onLeave, language = 'tr-TR
             textArea.remove();
         }
         setActiveMessageMenuId(null);
+        setToast('Mesaj kopyalandı');
+        setTimeout(() => setToast(''), 1600);
     };
 
     const forwardMessage = async (msg) => {
@@ -2237,27 +2245,43 @@ export default function IntercomInterface({ roomData, onLeave, language = 'tr-TR
                         ? 'bottom-3 -right-1 border-r border-b'
                         : '-left-1 top-5 border-b border-l'
             }`} />
+            <div className="relative z-10 flex items-center justify-between border-b border-[#E6DFF0] bg-white/95 px-2 py-1.5">
+                {['👍', '❤️', '😂', '😮', '🙏'].map(emoji => (
+                    <button
+                        key={emoji}
+                        type="button"
+                        onClick={() => {
+                            toggleReaction(msg.id, emoji);
+                            setActiveMessageMenuId(null);
+                        }}
+                        className="flex h-8 w-8 items-center justify-center rounded-full text-lg transition hover:bg-[#F4F0F8]"
+                        aria-label={`${emoji} tepkisi ver`}
+                    >
+                        {emoji}
+                    </button>
+                ))}
+            </div>
             <button type="button" onClick={() => {
                 setReplyToMsg({ id: msg.id, text: msg.text || 'Medya', senderName: msg.senderName });
                 setEditingMessage(null);
                 setActiveMessageMenuId(null);
                 setTimeout(() => manualInputRef.current?.focus(), 0);
-            }} className="flex w-full items-center gap-3 px-3 py-2 text-left text-xs font-semibold text-[#2D1F47] hover:bg-[#F4F0F8]">
+            }} className="relative z-10 flex w-full items-center gap-3 px-3 py-2 text-left text-xs font-semibold text-[#2D1F47] hover:bg-[#F4F0F8]">
                 <Reply size={16} /> Cevapla
             </button>
-            <button type="button" onClick={() => forwardMessage(msg)} className="flex w-full items-center gap-3 px-3 py-2 text-left text-xs font-semibold text-[#2D1F47] hover:bg-[#F4F0F8]">
+            <button type="button" onClick={() => forwardMessage(msg)} className="relative z-10 flex w-full items-center gap-3 px-3 py-2 text-left text-xs font-semibold text-[#2D1F47] hover:bg-[#F4F0F8]">
                 <Forward size={16} /> İlet
             </button>
             {isSelf && msg.text && (
-                <button type="button" onClick={() => startEditingMessage(msg)} className="flex w-full items-center gap-3 px-3 py-2 text-left text-xs font-semibold text-[#2D1F47] hover:bg-[#F4F0F8]">
+                <button type="button" onClick={() => startEditingMessage(msg)} className="relative z-10 flex w-full items-center gap-3 px-3 py-2 text-left text-xs font-semibold text-[#2D1F47] hover:bg-[#F4F0F8]">
                     <Pencil size={16} /> Düzenle
                 </button>
             )}
-            <button type="button" onClick={() => copyMessage(msg)} className="flex w-full items-center gap-3 px-3 py-2 text-left text-xs font-semibold text-[#2D1F47] hover:bg-[#F4F0F8]">
+            <button type="button" onClick={() => copyMessage(msg)} className="relative z-10 flex w-full items-center gap-3 px-3 py-2 text-left text-xs font-semibold text-[#2D1F47] hover:bg-[#F4F0F8]">
                 <Copy size={16} /> Kopyala
             </button>
             <div className="my-1 border-t border-[#E6DFF0]" />
-            <button type="button" onClick={() => deleteMessage(msg)} className="flex w-full items-center gap-3 px-3 py-2 text-left text-xs font-semibold text-rose-600 hover:bg-rose-50">
+            <button type="button" onClick={() => deleteMessage(msg)} className="relative z-10 flex w-full items-center gap-3 px-3 py-2 text-left text-xs font-semibold text-rose-600 hover:bg-rose-50">
                 <Trash2 size={16} /> Sil
             </button>
         </div>

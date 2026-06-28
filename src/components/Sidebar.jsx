@@ -244,6 +244,18 @@ export default function Sidebar({
                                     <label className="block text-xs font-semibold">Görünen ad<input value={nickname} onChange={e => setNickname(e.target.value)} className="eary-input mt-1.5 w-full rounded-lg border px-3 py-2.5 text-sm" /></label>
                                     <label className="block text-xs font-semibold">Hakkımda<textarea value={bio} onChange={e => setBio(e.target.value)} rows="3" className="eary-input mt-1.5 w-full resize-none rounded-lg border px-3 py-2.5 text-sm" placeholder="Kısa bir durum yazısı" /></label>
                                     <button type="button" onClick={saveProfile} className="eary-brand-bg flex w-full items-center justify-center gap-2 rounded-lg py-3 text-sm font-bold">{saved ? <><Check size={17} /> Kaydedildi</> : 'Profili kaydet'}</button>
+                                    {account.profile?.photo && (
+                                        <button
+                                            type="button"
+                                            onClick={() => {
+                                                onUpdateAccount?.({ ...account, profile: { ...account.profile, photo: '' } });
+                                                window.dispatchEvent(new CustomEvent('eary:toast', { detail: 'Profil fotoğrafı kaldırıldı' }));
+                                            }}
+                                            className="eary-soft flex w-full items-center justify-center gap-2 rounded-lg py-3 text-sm font-bold text-rose-600"
+                                        >
+                                            <Trash2 size={17} /> Profil fotoğrafını kaldır
+                                        </button>
+                                    )}
                                     <button type="button" onClick={copyInvite} className="eary-soft eary-brand flex w-full items-center justify-center gap-2 rounded-lg py-3 text-sm font-bold"><Copy size={17} />{inviteCopied ? 'Davet bağlantısı kopyalandı' : 'Davet bağlantısını kopyala'}</button>
                                     {account.profile?.contactMethod && account.profile.contactMethod !== 'legacy' && <div className="eary-soft flex items-start gap-3 rounded-lg p-3"><ShieldCheck size={17} className="eary-brand mt-0.5 shrink-0" /><div><p className="text-xs font-semibold">{account.profile.contactVerified ? 'İletişim bilgisi doğrulandı' : 'E-posta doğrulaması bekleniyor'}</p><p className="eary-muted mt-0.5 text-[10px]">{account.profile.contactHint} · Profilinizde görünmez</p></div></div>}
                                 </div>
