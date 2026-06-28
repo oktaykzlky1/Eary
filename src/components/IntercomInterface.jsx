@@ -10,10 +10,6 @@ import { Capacitor, registerPlugin } from '@capacitor/core';
 import { Mic, Trash2, X, AlertTriangle, Watch, ArrowLeft, Menu, Send, Smile, Paperclip, Camera, ChevronDown, LoaderCircle, Reply, Forward, Pencil, Copy, Image as ImageIcon, Share2, Volume2, Save, Eraser, PanelsTopLeft, Square, Languages } from 'lucide-react';
 
 const playBeep = (type) => {
-    if (Capacitor.isNativePlatform?.() && Capacitor.getPlatform() === 'ios') {
-        return;
-    }
-
     try {
         const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
         const osc = audioCtx.createOscillator();

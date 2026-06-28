@@ -1,28 +1,44 @@
-import { Capacitor, registerPlugin } from '@capacitor/core';
+import { Capacitor } from '@capacitor/core';
 import { SpeechRecognition } from '@capgo/capacitor-speech-recognition';
 
-const VoiceSettings = registerPlugin('VoiceSettings');
 let nativePermissionRequestPromise = null;
-let nativeSpeechSessionCounter = 0;
+let activeNativeRecognizer = null;
+let nextNativeSessionId = 1;
 
-const isIOSNative = () => Capacitor.getPlatform() === 'ios';
+const normalizeLanguage = language => String(language || 'tr-TR').replace('_', '-');
 
-const nativeSpeechErrorText = error => {
+const toSpeechErrorText = error => {
     try {
-        return [error?.message, error?.error, JSON.stringify(error), String(error || '')]
-            .filter(Boolean).join(' ').toLowerCase();
+        return [error?.message, error?.error, error?.code, JSON.stringify(error), String(error || '')]
+            .filter(Boolean)
+            .join(' ')
+            .toLowerCase();
     } catch {
         return String(error || '').toLowerCase();
     }
 };
 
-const isRecoverableNativeSpeechError = error => {
-    const value = nativeSpeechErrorText(error);
-    const fatal = ['permission', 'izin reddedildi', 'not authorized', 'language pack', 'locale'];
-    if (fatal.some(token => value.includes(token))) return false;
-    if (Capacitor.getPlatform() === 'ios') return true;
-    return ['no match', 'no_match', 'no speech', 'no_speech', 'busy', 'already', 'cancelled', 'canceled']
-        .some(token => value.includes(token));
+const isIgnorableSpeechError = error => {
+    const value = toSpeechErrorText(error);
+    return [
+        'no match',
+        'no_match',
+        'no speech',
+        'no_speech',
+        'aborted',
+        'cancelled',
+        'canceled',
+        'userstop'
+    ].some(token => value.includes(token));
+};
+
+const removeListener = async listener => {
+    if (!listener?.remove) return;
+    try {
+        await listener.remove();
+    } catch {
+        // Listener cleanup is best-effort; stale callbacks are also guarded by sessionId.
+    }
 };
 
 class WebSpeechRecognizer {
@@ -32,53 +48,65 @@ class WebSpeechRecognizer {
             this.supported = false;
             return;
         }
+
         this.supported = true;
+        this.language = normalizeLanguage(language);
+        this.onResult = onResult;
+        this.onEnd = onEnd;
+        this.onError = onError;
         this.isListening = false;
         this.recognition = new SpeechRecognitionClass();
         this.recognition.continuous = true;
         this.recognition.interimResults = true;
-        this.recognition.lang = language;
+        this.recognition.lang = this.language;
 
-        this.recognition.onresult = (event) => {
+        this.recognition.onresult = event => {
             let finalTranscript = '';
             let interimTranscript = '';
             let finalConfidence = null;
-            for (let i = event.resultIndex; i < event.results.length; ++i) {
-                if (event.results[i].isFinal) {
-                    finalTranscript += event.results[i][0].transcript;
-                    finalConfidence = event.results[i][0].confidence;
+
+            for (let index = event.resultIndex; index < event.results.length; index += 1) {
+                const result = event.results[index];
+                const transcript = result?.[0]?.transcript || '';
+                if (result.isFinal) {
+                    finalTranscript += transcript;
+                    finalConfidence = result?.[0]?.confidence ?? null;
                 } else {
-                    interimTranscript += event.results[i][0].transcript;
+                    interimTranscript += transcript;
                 }
             }
-            onResult(finalTranscript, interimTranscript, finalConfidence);
+
+            this.onResult(finalTranscript.trim(), interimTranscript.trim(), finalConfidence);
         };
 
         this.recognition.onend = () => {
             if (this.isListening) {
                 try {
                     this.recognition.start();
-                } catch (e) {
-                    console.error("WebSpeech auto-restart error:", e);
+                } catch {
+                    this.isListening = false;
+                    this.onEnd();
                 }
-            } else {
-                onEnd();
+                return;
             }
+            this.onEnd();
         };
 
-        this.recognition.onerror = (err) => {
-            onError(err);
+        this.recognition.onerror = error => {
+            if (isIgnorableSpeechError(error)) return;
+            this.onError(error);
         };
     }
 
     start() {
-        if (!this.supported) return;
+        if (!this.supported || this.isListening) return;
         this.isListening = true;
+        this.recognition.lang = this.language;
         this.recognition.start();
     }
 
     stop() {
-        if (!this.supported) return;
+        if (!this.supported || !this.isListening) return;
         this.isListening = false;
         this.recognition.stop();
     }
@@ -90,140 +118,99 @@ class WebSpeechRecognizer {
     }
 
     restart() {
-        if (!this.supported) return;
-        try {
-            this.recognition.abort();
-        } catch (e) {
-            console.error("WebSpeech restart error:", e);
-        }
+        this.abort();
+        this.start();
     }
 }
 
 class NativeSpeechRecognizer {
     constructor(language, onResult, onEnd, onError) {
         this.supported = true;
-        this.language = language;
+        this.language = normalizeLanguage(language);
         this.onResult = onResult;
         this.onEnd = onEnd;
         this.onError = onError;
-        this.listener = null;
-        this.stateListener = null;
-        this.errorListener = null;
-        this.isListening = false;
-        this.lastPartialText = '';
-        this.isStartingOrRestarting = false;
-        this.restartTimer = null;
-        this.startedAt = 0;
-        this.useOnDeviceRecognition = false;
         this.sessionId = 0;
+        this.isListening = false;
+        this.isEnding = false;
+        this.lastInterimText = '';
+        this.listeners = [];
+    }
+
+    isCurrent(sessionId) {
+        return this.isListening && this.sessionId === sessionId && activeNativeRecognizer === this;
+    }
+
+    async ensurePermissions() {
+        let permissions = await SpeechRecognition.checkPermissions();
+        if (permissions?.speechRecognition === 'granted') return;
+
+        if (!nativePermissionRequestPromise) {
+            nativePermissionRequestPromise = SpeechRecognition.requestPermissions()
+                .finally(() => {
+                    nativePermissionRequestPromise = null;
+                });
+        }
+
+        permissions = await nativePermissionRequestPromise;
+        if (permissions?.speechRecognition !== 'granted') {
+            throw new Error('Mikrofon veya konuşma tanıma izni reddedildi.');
+        }
+    }
+
+    async clearPluginListeners() {
+        await Promise.all(this.listeners.map(removeListener));
+        this.listeners = [];
+        try {
+            await SpeechRecognition.removeAllListeners?.();
+        } catch {
+            // Older plugin versions may not expose removeAllListeners.
+        }
     }
 
     async start() {
-        if (this.isListening || this.isStartingOrRestarting) return;
+        if (this.isListening) return;
+
+        if (activeNativeRecognizer && activeNativeRecognizer !== this) {
+            await activeNativeRecognizer.abort();
+        }
+
+        activeNativeRecognizer = this;
+        this.sessionId = nextNativeSessionId;
+        nextNativeSessionId += 1;
+        this.isListening = true;
+        this.isEnding = false;
+        this.lastInterimText = '';
+        const sessionId = this.sessionId;
+
         try {
-            if (!isIOSNative()) {
-                try {
-                    await VoiceSettings.startAudioRouting();
-                } catch (e) {
-                    console.error("Failed to start audio routing:", e);
-                }
-            }
+            await this.ensurePermissions();
+            await this.clearPluginListeners();
 
-            // 1. Verify and request Android native microphone permissions
-            let permStatus = await SpeechRecognition.checkPermissions();
-            if (permStatus.speechRecognition !== 'granted') {
-                if (!nativePermissionRequestPromise) {
-                    nativePermissionRequestPromise = SpeechRecognition.requestPermissions()
-                        .finally(() => { nativePermissionRequestPromise = null; });
-                }
-                permStatus = await nativePermissionRequestPromise;
-                if (permStatus.speechRecognition !== 'granted') {
-                    this.onError("Mikrofon veya konuşma tanıma izni reddedildi.");
-                    return;
-                }
-            }
+            const partialListener = await SpeechRecognition.addListener('partialResults', data => {
+                if (!this.isCurrent(sessionId)) return;
+                const text = String(data?.matches?.[0] || '').trim();
+                if (!text) return;
 
-            this.isListening = true;
-            this.lastPartialText = '';
-            this.isStartingOrRestarting = true;
-            this.startedAt = Date.now();
-            this.sessionId = ++nativeSpeechSessionCounter;
-            const activeSessionId = this.sessionId;
+                this.lastInterimText = text;
+                this.onResult('', text, null);
+            });
 
-            await this.removeListeners();
-            if (typeof SpeechRecognition.removeAllListeners === 'function') {
-                try {
-                    await SpeechRecognition.removeAllListeners();
-                } catch (error) {
-                    console.warn("Failed to clear stale speech listeners:", error);
-                }
-            }
-
-            // 2. Register listener for native partial transcription updates
-            this.listener = await SpeechRecognition.addListener("partialResults", (data) => {
-                if (!this.isListening || this.sessionId !== activeSessionId) return;
-                if (data && data.matches && data.matches.length > 0) {
-                    const text = data.matches[0];
-                    this.lastPartialText = text;
-                    // Treat matches[0] as interim preview text
-                    this.onResult("", text);
+            const stateListener = await SpeechRecognition.addListener('listeningState', data => {
+                if (!this.isCurrent(sessionId)) return;
+                if (data?.state === 'stopped') {
+                    this.finish({ notifyEnd: true, callNativeStop: false });
                 }
             });
 
-            // 3. Register state listener to detect if the OS stops listening (e.g. silence or error)
-            this.stateListener = await SpeechRecognition.addListener("listeningState", (data) => {
-                if (this.sessionId !== activeSessionId) return;
-                if (data && data.state === "started") {
-                    this.isStartingOrRestarting = false;
-                }
-                if (data && data.state === "stopped" && this.isListening) {
-                    if (isIOSNative()) {
-                        this.isListening = false;
-                        this.isStartingOrRestarting = false;
-                        this.onEnd();
-                        return;
-                    }
-                    this.scheduleRestart();
-                }
+            const errorListener = await SpeechRecognition.addListener('error', data => {
+                if (!this.isCurrent(sessionId)) return;
+                this.finish({ notifyEnd: false, callNativeStop: false });
+                if (!isIgnorableSpeechError(data)) this.onError(data);
             });
 
-            // Register error listener
-            this.errorListener = await SpeechRecognition.addListener("error", (data) => {
-                if (this.sessionId !== activeSessionId) return;
-                console.error("Native SpeechRecognition Error Event:", data);
-                if (this.isListening) {
-                    const errorMsg = data.message || data.error || "";
-                    if (isIOSNative()) {
-                        this.isListening = false;
-                        this.isStartingOrRestarting = false;
-                        this.onError(errorMsg || "Speech Recognition Error");
-                        return;
-                    }
-                    if (isRecoverableNativeSpeechError(data)) {
-                        this.scheduleRestart();
-                        return;
-                    }
-                    this.onError(errorMsg || "Speech Recognition Error");
-                    this.stop();
-                }
-            });
+            this.listeners = [partialListener, stateListener, errorListener];
 
-            let useOnDeviceRecognition = false;
-            if (!isIOSNative()) {
-                try {
-                    const availability = await SpeechRecognition.isOnDeviceRecognitionAvailable({ language: this.language });
-                useOnDeviceRecognition = Boolean(availability?.available);
-                this.useOnDeviceRecognition = useOnDeviceRecognition;
-                } catch (error) {
-                    console.warn('On-device speech recognition availability could not be checked:', error);
-                }
-            }
-
-            if (!isIOSNative()) {
-                await SpeechRecognition.setPTTState({ held: true });
-            }
-
-            // 4. Launch native speech recognizer silently in the background (no popup)
             await SpeechRecognition.start({
                 language: this.language,
                 maxResults: 1,
@@ -231,173 +218,58 @@ class NativeSpeechRecognizer {
                 popup: false,
                 addPunctuation: true,
                 allowForSilence: 3000,
-                continuousPTT: !isIOSNative(),
-                useOnDeviceRecognition
+                continuousPTT: false,
+                useOnDeviceRecognition: false
             });
-
-        } catch (err) {
-            this.isStartingOrRestarting = false;
-            if (this.isListening) {
-                if (isIOSNative()) {
-                    this.isListening = false;
-                    this.onError(err);
-                    return;
-                }
-                if (isRecoverableNativeSpeechError(err)) {
-                    this.scheduleRestart();
-                    return;
-                }
-                this.isListening = false;
-                this.onError(err);
-            }
+        } catch (error) {
+            await this.finish({ notifyEnd: false, callNativeStop: true });
+            throw error;
         }
     }
 
-    scheduleRestart() {
-        if (!this.isListening || this.restartTimer) return;
-        const remainingGracePeriod = Math.max(0, 1200 - (Date.now() - this.startedAt));
-        this.restartTimer = setTimeout(() => {
-            this.restartTimer = null;
-            this.restartListening();
-        }, Math.max(250, remainingGracePeriod));
-    }
+    async finish({ notifyEnd, callNativeStop }) {
+        if (this.isEnding) return;
+        this.isEnding = true;
+        const wasListening = this.isListening;
+        this.isListening = false;
+        this.sessionId = 0;
 
-    async restartListening() {
-        if (!this.isListening) return;
-        const activeSessionId = this.sessionId;
-        if (isIOSNative()) return;
-        if (this.isStartingOrRestarting) {
-            console.log("Speech recognition is already starting/restarting, skipping redundant restart call.");
-            return;
-        }
-        this.isStartingOrRestarting = true;
-        this.startedAt = Date.now();
-        try {
+        if (activeNativeRecognizer === this) activeNativeRecognizer = null;
+
+        if (callNativeStop) {
             try {
-                await VoiceSettings.startAudioRouting();
-            } catch (errRoute) {
-                console.error("Failed to start audio routing on restart:", errRoute);
+                await SpeechRecognition.stop();
+            } catch {
+                // Stop can reject if native recognition already ended.
             }
-
-            // Finalize the last partial text if any
-            if (this.sessionId === activeSessionId && this.lastPartialText.trim()) {
-                this.onResult(this.lastPartialText.trim(), "");
-                this.lastPartialText = '';
-            }
-            
-            // Restart native Speech Recognition silently
-            await SpeechRecognition.start({
-                language: this.language,
-                maxResults: 1,
-                partialResults: true,
-                popup: false,
-                addPunctuation: true,
-                allowForSilence: 3000,
-                continuousPTT: true,
-                useOnDeviceRecognition: this.useOnDeviceRecognition
-            });
-        } catch (e) {
-            console.error("Error restarting speech recognition:", e);
-            this.isStartingOrRestarting = false;
-            if (isRecoverableNativeSpeechError(e)) this.scheduleRestart();
-            else this.stop();
         }
+
+        await this.clearPluginListeners();
+        this.lastInterimText = '';
+        this.isEnding = false;
+
+        if (wasListening && notifyEnd) this.onEnd();
     }
 
     async stop() {
         if (!this.isListening) return;
-        this.isListening = false;
-        this.isStartingOrRestarting = false;
-        const activePartialText = String(this.lastPartialText || '').trim();
-        this.sessionId = ++nativeSpeechSessionCounter;
-        clearTimeout(this.restartTimer);
-        this.restartTimer = null;
-        
-        try {
-            if (isIOSNative()) {
-                await SpeechRecognition.stop();
-                const finalText = activePartialText;
-                if (finalText) this.onResult(finalText, "");
-            } else {
-                await SpeechRecognition.setPTTState({ held: false });
-                const cached = await SpeechRecognition.getLastPartialResult();
-                await SpeechRecognition.forceStop({ timeout: 1000 });
-                const finalText = String(cached?.text || this.lastPartialText || '').trim();
-                if (finalText) this.onResult(finalText, "");
-            }
-        } catch (e) {
-            console.error("Error stopping Speech Recognition:", e);
-            if (activePartialText) {
-                this.onResult(activePartialText, "");
-            }
-        }
-
-        if (!isIOSNative()) {
-            try {
-                await VoiceSettings.stopAudioRouting();
-            } catch (e) {
-                console.error("Failed to stop audio routing:", e);
-            }
-        }
-
-        await this.removeListeners();
-
-        // Instantly trigger UI reset to turn button grey
-        this.onEnd();
+        await this.finish({ notifyEnd: true, callNativeStop: true });
     }
 
-    async removeListeners() {
-        if (this.listener) {
-            try {
-                this.listener.remove();
-            } catch (error) {
-                console.warn("Failed to remove speech partial listener:", error);
-            }
-            this.listener = null;
-        }
-        if (this.stateListener) {
-            try {
-                this.stateListener.remove();
-            } catch (error) {
-                console.warn("Failed to remove speech state listener:", error);
-            }
-            this.stateListener = null;
-        }
-        if (this.errorListener) {
-            try {
-                this.errorListener.remove();
-            } catch (error) {
-                console.warn("Failed to remove speech error listener:", error);
-            }
-            this.errorListener = null;
-        }
+    async abort() {
+        if (!this.isListening && !this.listeners.length) return;
+        await this.finish({ notifyEnd: false, callNativeStop: true });
     }
 
-    abort() {
-        this.sessionId = ++nativeSpeechSessionCounter;
-        this.isListening = false;
-        this.isStartingOrRestarting = false;
-        this.lastPartialText = '';
-        clearTimeout(this.restartTimer);
-        this.restartTimer = null;
-        this.removeListeners();
-        try {
-            SpeechRecognition.stop();
-        } catch {
-            // best-effort cleanup only
-        }
-    }
-
-    restart() {
-        this.lastPartialText = '';
-        this.restartListening();
+    async restart() {
+        await this.abort();
+        await this.start();
     }
 }
 
 export const getDuoSpeechRecognizer = (language, onResult, onEnd, onError) => {
     if (Capacitor.isNativePlatform()) {
         return new NativeSpeechRecognizer(language, onResult, onEnd, onError);
-    } else {
-        return new WebSpeechRecognizer(language, onResult, onEnd, onError);
     }
+    return new WebSpeechRecognizer(language, onResult, onEnd, onError);
 };
