@@ -1,5 +1,6 @@
-import { Capacitor } from '@capacitor/core';
-import { SpeechRecognition } from '@capgo/capacitor-speech-recognition';
+import { Capacitor, registerPlugin } from '@capacitor/core';
+
+const EarySpeech = registerPlugin('EarySpeech');
 
 let nativePermissionRequestPromise = null;
 let activeNativeRecognizer = null;
@@ -32,12 +33,14 @@ const isIgnorableSpeechError = error => {
     ].some(token => value.includes(token));
 };
 
+const isGranted = value => String(value || '').toLowerCase() === 'granted';
+
 const removeListener = async listener => {
     if (!listener?.remove) return;
     try {
         await listener.remove();
     } catch {
-        // Listener cleanup is best-effort; stale callbacks are also guarded by sessionId.
+        // Native listeners are guarded by session ids; cleanup is best-effort.
     }
 };
 
@@ -142,30 +145,25 @@ class NativeSpeechRecognizer {
     }
 
     async ensurePermissions() {
-        let permissions = await SpeechRecognition.checkPermissions();
-        if (permissions?.speechRecognition === 'granted') return;
+        let permissions = await EarySpeech.checkPermissions();
+        if (isGranted(permissions?.microphone) && isGranted(permissions?.speechRecognition ?? 'granted')) return;
 
         if (!nativePermissionRequestPromise) {
-            nativePermissionRequestPromise = SpeechRecognition.requestPermissions()
+            nativePermissionRequestPromise = EarySpeech.requestPermissions()
                 .finally(() => {
                     nativePermissionRequestPromise = null;
                 });
         }
 
         permissions = await nativePermissionRequestPromise;
-        if (permissions?.speechRecognition !== 'granted') {
+        if (!isGranted(permissions?.microphone) || !isGranted(permissions?.speechRecognition ?? 'granted')) {
             throw new Error('Mikrofon veya konuşma tanıma izni reddedildi.');
         }
     }
 
-    async clearPluginListeners() {
+    async clearListeners() {
         await Promise.all(this.listeners.map(removeListener));
         this.listeners = [];
-        try {
-            await SpeechRecognition.removeAllListeners?.();
-        } catch {
-            // Older plugin versions may not expose removeAllListeners.
-        }
     }
 
     async start() {
@@ -185,25 +183,31 @@ class NativeSpeechRecognizer {
 
         try {
             await this.ensurePermissions();
-            await this.clearPluginListeners();
+            await this.clearListeners();
 
-            const partialListener = await SpeechRecognition.addListener('partialResults', data => {
+            const partialListener = await EarySpeech.addListener('partialResults', data => {
                 if (!this.isCurrent(sessionId)) return;
                 const text = String(data?.matches?.[0] || '').trim();
                 if (!text) return;
 
+                if (data?.isFinal) {
+                    this.lastInterimText = '';
+                    this.onResult(text, '', data?.confidence ?? null);
+                    return;
+                }
+
                 this.lastInterimText = text;
-                this.onResult('', text, null);
+                this.onResult('', text, data?.confidence ?? null);
             });
 
-            const stateListener = await SpeechRecognition.addListener('listeningState', data => {
+            const stateListener = await EarySpeech.addListener('listeningState', data => {
                 if (!this.isCurrent(sessionId)) return;
                 if (data?.state === 'stopped') {
                     this.finish({ notifyEnd: true, callNativeStop: false });
                 }
             });
 
-            const errorListener = await SpeechRecognition.addListener('error', data => {
+            const errorListener = await EarySpeech.addListener('error', data => {
                 if (!this.isCurrent(sessionId)) return;
                 this.finish({ notifyEnd: false, callNativeStop: false });
                 if (!isIgnorableSpeechError(data)) this.onError(data);
@@ -211,15 +215,11 @@ class NativeSpeechRecognizer {
 
             this.listeners = [partialListener, stateListener, errorListener];
 
-            await SpeechRecognition.start({
+            await EarySpeech.start({
                 language: this.language,
                 maxResults: 1,
                 partialResults: true,
-                popup: false,
-                addPunctuation: true,
-                allowForSilence: 3000,
-                continuousPTT: false,
-                useOnDeviceRecognition: false
+                addPunctuation: true
             });
         } catch (error) {
             await this.finish({ notifyEnd: false, callNativeStop: true });
@@ -238,13 +238,13 @@ class NativeSpeechRecognizer {
 
         if (callNativeStop) {
             try {
-                await SpeechRecognition.stop();
+                await EarySpeech.stop();
             } catch {
                 // Stop can reject if native recognition already ended.
             }
         }
 
-        await this.clearPluginListeners();
+        await this.clearListeners();
         this.lastInterimText = '';
         this.isEnding = false;
 
