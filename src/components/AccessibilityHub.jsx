@@ -94,6 +94,11 @@ const LISTENING_REPLACEMENTS = [
     [/\btahlil\b/giu, 'tahlil']
 ];
 
+const SENTENCE_BREAK_MARKERS = [
+    'arkadaşlar', 'öncelikle', 'biraz sonra', 'şimdi', 'hazırsanız', 'bakalım',
+    'son olarak', 'diğer konu', 'burada', 'bundan sonra', 'devam edelim'
+];
+
 const cleanListeningText = (text, language = 'tr-TR') => {
     let next = correctTranscription(String(text || ''), language)
         .replace(/\s+/g, ' ')
@@ -106,19 +111,89 @@ const cleanListeningText = (text, language = 'tr-TR') => {
     return next;
 };
 
+const addListeningPunctuation = text => {
+    let next = String(text || '').replace(/\s+/g, ' ').trim();
+    SENTENCE_BREAK_MARKERS.forEach(marker => {
+        const pattern = new RegExp(`\\s+(${marker})\\b`, 'giu');
+        next = next.replace(pattern, (match, word, offset, full) => {
+            const before = full.slice(0, offset).trim();
+            if (!before || /[.!?]$/.test(before)) return ` ${word}`;
+            return `. ${word}`;
+        });
+    });
+    next = next
+        .replace(/\s+(çünkü|ama|fakat|ancak)\s+/giu, ', $1 ')
+        .replace(/\s+(ondan|o yüzden|bu yüzden)\s+/giu, '. $1 ')
+        .replace(/\s+([.!?])/g, '$1')
+        .replace(/([.!?])\s*([a-zğçşöüıi])/g, (_, punctuation, letter) => `${punctuation} ${letter.toLocaleUpperCase('tr-TR')}`);
+    return next;
+};
+
+const splitLongSentence = sentence => {
+    const words = String(sentence || '').trim().split(/\s+/).filter(Boolean);
+    if (words.length <= 26) return [sentence.trim()];
+    const chunks = [];
+    for (let index = 0; index < words.length; index += 22) {
+        const chunk = words.slice(index, index + 22).join(' ').replace(/[.!?]+$/, '');
+        chunks.push(`${chunk}.`);
+    }
+    return chunks;
+};
+
+const segmentListeningText = text => {
+    const punctuated = addListeningPunctuation(text);
+    return punctuated
+        .split(/(?<=[.!?])\s+/)
+        .flatMap(splitLongSentence)
+        .map(segment => cleanListeningText(segment))
+        .filter(Boolean);
+};
+
 const isImportantListeningText = (text, contextConfig) => {
     const value = String(text || '').toLocaleLowerCase('tr-TR');
     const contextKeywords = contextConfig.groups.flatMap(group => group.keywords);
-    return [...LISTENING_IMPORTANT_HINTS, ...contextKeywords].some(keyword => value.includes(keyword));
+    const strongSignals = ['önemli', 'unutmayın', 'dikkat', 'sınav', 'ödev', 'teslim', 'son gün', 'yarın', 'haftaya', 'zorunlu'];
+    if (strongSignals.some(keyword => value.includes(keyword))) return true;
+    return contextKeywords.some(keyword => {
+        if (keyword === 'tarih') return /(teslim|son|sınav|randevu)\s+tarih|tarih(i|ini|inde|inden)/i.test(value);
+        return value.includes(keyword);
+    });
 };
 
-const summarizeListeningLines = lines => {
+const summarizeListeningLines = (lines, contextConfig = MODE_CONFIG.general) => {
     if (!lines.length) return 'Henüz özetlenecek konuşma yok.';
-    const important = lines.filter(line => line.important);
-    const source = (important.length ? important : lines).slice(-6);
-    const sentences = source.map(line => line.text.replace(/[.!?]+$/, '').trim()).filter(Boolean);
-    if (!sentences.length) return 'Konuşma metni henüz yeterince net değil.';
-    return sentences.slice(0, 4).join('. ') + '.';
+    const joined = lines.map(line => line.text).join(' ').toLocaleLowerCase('tr-TR');
+    const bullets = [];
+
+    if (/(tyt|ayt|ders|soru bankası|video ders|not)/i.test(joined)) {
+        const exams = ['TYT', 'AYT'].filter(token => joined.includes(token.toLocaleLowerCase('tr-TR'))).join(' ve ');
+        bullets.push(`${exams || 'Ders'} kaynakları ve çalışma materyalleri tanıtılıyor.`);
+    }
+    if (/(tarih|çağdaş|dünya tarihi)/i.test(joined)) {
+        bullets.push('Tarih konuları ve zor görülen bölümler üzerinde duruluyor.');
+    }
+    if (/(başlayalım|izleyeceğiz|yol|harita|plan|içeriğinden bahs)/i.test(joined)) {
+        bullets.push('Dersin işleyişi ve izlenecek yol kısaca açıklanıyor.');
+    }
+
+    contextConfig.groups.forEach(group => {
+        if (bullets.length >= 3) return;
+        const matched = group.lines?.length || lines.some(line => group.keywords.some(keyword => line.text.toLocaleLowerCase('tr-TR').includes(keyword)));
+        if (matched && !bullets.some(item => item.includes(group.title))) {
+            bullets.push(`${group.title} ile ilgili noktalar öne çıkıyor.`);
+        }
+    });
+
+    if (!bullets.length) {
+        const compact = lines
+            .slice(-4)
+            .map(line => line.text.replace(/[.!?]+$/, '').split(/\s+/).slice(0, 12).join(' '))
+            .filter(Boolean)
+            .slice(0, 2);
+        bullets.push(...compact.map(item => `${item}.`));
+    }
+
+    return bullets.slice(0, 3).map(item => `• ${item.replace(/[.!?]+$/, '')}.`).join('\n');
 };
 
 const loadJson = (key, fallback) => {
@@ -379,29 +454,34 @@ function AmbientListeningTool({ onBack }) {
 
     const appendCaption = (rawText, confidence) => {
         const now = Date.now();
-        const clean = cleanListeningText(rawText, language);
-        if (!clean) return;
-        const important = isImportantListeningText(clean, contextConfig);
+        const segments = segmentListeningText(rawText);
+        if (!segments.length) return;
         setCaptions(current => {
-            const last = current[current.length - 1];
-            const shouldJoin = last && now - last.timestamp < 4500 && !important && !last.important && clean.length < 120;
-            if (shouldJoin) {
-                const mergedText = cleanListeningText(`${last.text} ${clean}`, language);
-                return [...current.slice(0, -1), {
-                    ...last,
-                    text: mergedText,
-                    timestamp: now,
-                    uncertain: last.uncertain || (confidence != null && confidence < 0.62)
-                }];
-            }
-            return [...current, {
-                id: now,
-                text: clean,
-                rawText: rawText.trim(),
-                timestamp: now,
-                important,
-                uncertain: confidence != null && confidence < 0.62
-            }];
+            let next = [...current];
+            segments.forEach((clean, index) => {
+                const important = isImportantListeningText(clean, contextConfig);
+                const last = next[next.length - 1];
+                const startsNewThought = /^(arkadaşlar|öncelikle|biraz sonra|şimdi|son olarak|bakalım|burada)\b/i.test(clean);
+                const shouldJoin = last && now - last.timestamp < 2400 && !startsNewThought && !important && !last.important && last.text.length < 95 && clean.length < 70;
+                if (shouldJoin) {
+                    next = [...next.slice(0, -1), {
+                        ...last,
+                        text: cleanListeningText(`${last.text} ${clean}`, language),
+                        timestamp: now + index,
+                        uncertain: last.uncertain || (confidence != null && confidence < 0.62)
+                    }];
+                } else {
+                    next.push({
+                        id: now + index,
+                        text: clean,
+                        rawText: rawText.trim(),
+                        timestamp: now + index,
+                        important,
+                        uncertain: confidence != null && confidence < 0.62
+                    });
+                }
+            });
+            return next;
         });
     };
 
@@ -449,7 +529,7 @@ function AmbientListeningTool({ onBack }) {
     };
 
     const refreshSummary = () => {
-        setSummaryText(summarizeListeningLines(captions));
+        setSummaryText(summarizeListeningLines(captions, contextConfig));
         setSummaryOpen(true);
     };
 
@@ -514,7 +594,7 @@ function AmbientListeningTool({ onBack }) {
                         </div>
                         <article className="rounded-lg border border-emerald-200 bg-emerald-50 p-3">
                             <h3 className="text-sm font-bold text-emerald-900">Kısa özet</h3>
-                            <p className="mt-2 text-sm leading-6 text-emerald-950">{summaryText || summarizeListeningLines(captions)}</p>
+                            <p className="mt-2 whitespace-pre-line text-sm leading-6 text-emerald-950">{summaryText || summarizeListeningLines(captions, contextConfig)}</p>
                         </article>
                         <article className="rounded-lg border border-amber-200 bg-amber-50 p-3">
                             <h3 className="text-sm font-bold text-amber-900">Önemli notlar</h3>
@@ -545,7 +625,12 @@ function AmbientListeningTool({ onBack }) {
                                     </span>
                                 </div>
                                 <p className={`text-[15px] font-semibold leading-7 ${line.uncertain ? 'decoration-rose-500 decoration-wavy underline' : ''}`}>{renderHighlighted(line.text)}</p>
-                                {line.rawText && line.rawText !== line.text && <p className="eary-muted mt-2 text-[9px]">Düzeltilmiş metin · Ham: {line.rawText}</p>}
+                                {line.rawText && line.rawText !== line.text && line.uncertain && (
+                                    <details className="eary-muted mt-2 text-[9px]">
+                                        <summary className="cursor-pointer font-bold">Ham metni göster</summary>
+                                        <p className="mt-1 leading-4">{line.rawText}</p>
+                                    </details>
+                                )}
                             </article>
                         ))}
                         {interim && <div className="rounded-lg border border-dashed eary-line p-3 text-sm italic eary-muted">{interim}</div>}
