@@ -7,8 +7,6 @@ import {
 } from 'lucide-react';
 import { getDuoSpeechRecognizer } from '../utils/speech';
 import { requestNotificationPermission, scheduleNotification } from '../utils/notifications';
-import { correctTranscription } from '../utils/autocorrect';
-import { SUPPORTED_LANGUAGES, getInitialAppLanguage, getLanguageLabel } from '../utils/language';
 import { Capacitor, registerPlugin } from '@capacitor/core';
 
 const EnvironmentalSound = registerPlugin('EnvironmentalSound');
@@ -21,16 +19,6 @@ const SOUND_TYPES = [
 ];
 
 const MODE_CONFIG = {
-    general: {
-        title: 'Genel', icon: Captions, color: '#176b5b', prompt: 'Konuşmayı okunabilir canlı metne çevir',
-        speakers: ['Konuşmacı'],
-        groups: [
-            { title: 'Önemli noktalar', keywords: ['önemli', 'unutmayın', 'dikkat', 'gerekli', 'zorunlu'] },
-            { title: 'Tarihler ve saatler', keywords: ['bugün', 'yarın', 'haftaya', 'tarih', 'saat', 'son gün'] },
-            { title: 'Yapılacaklar', keywords: ['yapın', 'hazırlayın', 'gönderin', 'getirin', 'kontrol edin'] }
-        ],
-        phrases: ['Tekrar eder misiniz?', 'Biraz yavaş konuşabilir misiniz?', 'Bunu yazılı olarak paylaşır mısınız?']
-    },
     meeting: {
         title: 'Toplantı', icon: UsersRound, color: '#316fa8', prompt: 'Kararları, görevleri ve sorumluları ayır',
         speakers: ['Konuşmacı 1', 'Konuşmacı 2', 'Konuşmacı 3'],
@@ -75,50 +63,6 @@ const MODE_CONFIG = {
         ],
         phrases: ['Bunu yazılı olarak verebilir misiniz?', 'Son tarihi tekrar eder misiniz?', 'Gerekli belgelerin listesini verebilir misiniz?']
     }
-};
-
-const LISTENING_IMPORTANT_HINTS = [
-    'önemli', 'unutmayın', 'dikkat', 'sınav', 'ödev', 'teslim', 'son gün', 'yarın', 'haftaya',
-    'randevu', 'kontrol', 'ilaç', 'doz', 'belge', 'evrak', 'ücret', 'ödeme', 'karar', 'görev',
-    'zorunlu', 'yapmanız gerekiyor', 'getirin', 'gönderin', 'hazırlayın'
-];
-
-const LISTENING_REPLACEMENTS = [
-    [/\bprose\b/giu, 'proje'],
-    [/\bproje teslim tarihihi\b/giu, 'proje teslim tarihini'],
-    [/\byollican\b/giu, 'göndereceksiniz'],
-    [/\byollayacaksınız\b/giu, 'göndereceksiniz'],
-    [/\bpdf\b/giu, 'PDF'],
-    [/\bquiz\b/giu, 'quiz'],
-    [/\brandevu\b/giu, 'randevu'],
-    [/\btahlil\b/giu, 'tahlil']
-];
-
-const cleanListeningText = (text, language = 'tr-TR') => {
-    let next = correctTranscription(String(text || ''), language)
-        .replace(/\s+/g, ' ')
-        .replace(/\b(\p{L}{2,})\s+\1\b/giu, '$1')
-        .trim();
-    LISTENING_REPLACEMENTS.forEach(([pattern, replacement]) => {
-        next = next.replace(pattern, replacement);
-    });
-    next = next.replace(/\s+([.,!?])/g, '$1');
-    return next;
-};
-
-const isImportantListeningText = (text, contextConfig) => {
-    const value = String(text || '').toLocaleLowerCase('tr-TR');
-    const contextKeywords = contextConfig.groups.flatMap(group => group.keywords);
-    return [...LISTENING_IMPORTANT_HINTS, ...contextKeywords].some(keyword => value.includes(keyword));
-};
-
-const summarizeListeningLines = lines => {
-    if (!lines.length) return 'Henüz özetlenecek konuşma yok.';
-    const important = lines.filter(line => line.important);
-    const source = (important.length ? important : lines).slice(-6);
-    const sentences = source.map(line => line.text.replace(/[.!?]+$/, '').trim()).filter(Boolean);
-    if (!sentences.length) return 'Konuşma metni henüz yeterince net değil.';
-    return sentences.slice(0, 4).join('. ') + '.';
 };
 
 const loadJson = (key, fallback) => {
@@ -347,223 +291,85 @@ function EnvironmentMonitor({ onBack }) {
     return <main className="eary-shell relative mx-auto flex h-screen w-full max-w-md flex-col overflow-hidden sm:h-[800px] sm:rounded-xl sm:border sm:eary-line">{flash && <div className="pointer-events-none absolute inset-0 z-50 animate-pulse border-[18px] border-amber-400 bg-amber-200/35" />}<header className="eary-ios-safe-header flex items-center gap-3 border-b eary-line px-4 pb-3"><button type="button" onClick={onBack} className="eary-soft eary-muted flex h-10 w-10 items-center justify-center rounded-lg"><ArrowLeft size={20} /></button><div><h1 className="font-bold">Çevresel Ses Uyarıları</h1><p className="eary-muted text-[10px]">Yalnız siz açtığınızda mikrofon kullanılır</p></div></header><div className="flex-1 overflow-y-auto pb-6"><section className="px-4 py-4"><div className={`rounded-lg border px-4 py-3 ${monitoring ? 'border-emerald-300 bg-emerald-50 text-emerald-800' : 'eary-line eary-soft'}`}><div className="flex items-center gap-3"><span className={`h-3 w-3 rounded-full ${monitoring ? 'animate-pulse bg-emerald-500' : 'bg-slate-400'}`} /><div className="flex-1"><p className="text-sm font-bold">{monitoring ? 'Aktif' : 'Kapalı'}</p><p className="text-[10px] opacity-75">{status}</p></div><button type="button" onClick={monitoring ? stopMonitoring : startMonitoring} className={`rounded-lg px-4 py-2 text-xs font-bold ${monitoring ? 'bg-rose-100 text-rose-700' : 'eary-brand-bg'}`}>{monitoring ? 'Durdur' : 'Başlat'}</button></div></div></section><p className="eary-muted px-4 pb-2 text-[10px] font-bold uppercase">İzlenecek sesler</p><section className="grid grid-cols-2 gap-2 px-4">{SOUND_TYPES.map(([id,label,Icon]) => <button key={id} type="button" onClick={() => toggleSound(id)} className={`flex min-h-20 items-center gap-3 rounded-lg border p-3 text-left ${settings.enabled.includes(id) ? 'border-[var(--brand)] eary-brand-soft' : 'eary-line eary-shell'}`}><Icon size={20} /><span className="text-xs font-semibold">{label}</span>{settings.enabled.includes(id) && <Check size={14} className="ml-auto" />}</button>)}</section><section className="mt-5 border-y eary-line px-4 py-4"><div className="mb-3 flex items-center justify-between"><div><h2 className="text-sm font-bold">Özel seslerim</h2><p className="eary-muted text-[10px]">Fırın, çamaşır makinesi veya size özel bir sesi öğretin</p></div><span className="eary-muted text-[10px]">{customProfiles.length}/10</span></div><div className="flex gap-2"><input value={customDraft} onChange={event=>setCustomDraft(event.target.value)} onKeyDown={event=>event.key==='Enter'&&addCustomProfile()} placeholder="Örn. Fırın zamanlayıcısı" className="eary-input min-w-0 flex-1 rounded-lg border px-3 py-2 text-xs"/><button type="button" onClick={addCustomProfile} disabled={!customDraft.trim()||customProfiles.length>=10} className="eary-brand-bg flex h-9 w-9 items-center justify-center rounded-lg disabled:opacity-40" title="Özel ses ekle"><Plus size={17}/></button></div>{customProfiles.length>0&&<div className="mt-3 space-y-2">{customProfiles.map(profile=><div key={profile.id} className="eary-soft flex items-center gap-2 rounded-lg border eary-line p-2.5"><input type="checkbox" checked={profile.enabled} disabled={!profile.samples} onChange={event=>setCustomProfiles(current=>current.map(item=>item.id===profile.id?{...item,enabled:event.target.checked}:item))} className="h-4 w-4 accent-[var(--brand)]"/><div className="min-w-0 flex-1"><p className="truncate text-xs font-semibold">{profile.label}</p><p className="eary-muted text-[9px]">{profile.samples?profile.samples+' örnek öğretildi':'Henüz örnek yok'}{profile.samples<3?' · En az 3 önerilir':''}</p></div><button type="button" onClick={()=>trainCustomProfile(profile)} disabled={trainingId!==null} className="eary-brand-soft rounded-md px-2.5 py-2 text-[9px] font-bold disabled:opacity-40">{trainingId===profile.id?'Dinliyor...':profile.samples?'Tekrar öğret':'Öğret'}</button><button type="button" onClick={()=>removeCustomProfile(profile)} className="eary-muted flex h-8 w-8 items-center justify-center rounded-md" title="Özel sesi sil"><Trash2 size={14}/></button></div>)}</div>}</section><section className="mt-5 border-y eary-line px-4 py-4"><label className="flex items-center gap-3"><input type="checkbox" checked={settings.nameEnabled} onChange={event => setSettings(current => ({...current,nameEnabled:event.target.checked}))} className="h-4 w-4 accent-[var(--brand)]" /><span className="text-sm font-semibold">İsmim söylendiğinde uyar</span></label>{settings.nameEnabled && <div className="mt-3 flex gap-2"><input value={nameDraft} onChange={event => {setNameDraft(event.target.value);setNameSaved(false);}} className="eary-input min-w-0 flex-1 rounded-lg border px-3 py-2.5 text-sm" placeholder="Örn. Aslı" /><button type="button" onClick={saveName} disabled={!nameDraft.trim()} className="eary-brand-bg flex h-10 w-10 shrink-0 items-center justify-center rounded-lg disabled:opacity-40" title="İsmi kaydet"><Check size={18}/></button></div>}{nameSaved&&<p className="mt-2 text-[10px] font-semibold text-emerald-600">İsim kaydedildi</p>}</section><p className="eary-muted px-4 pb-2 pt-5 text-[10px] font-bold uppercase">Uyarı biçimi</p><section className="px-4">{[['vibration','Güçlü titreşim'],['screenFlash','Ekran ışığı'],['watch','Telefon ve akıllı saat bildirimi']].map(([key,label]) => <label key={key} className="flex items-center gap-3 border-b eary-line py-3"><input type="checkbox" checked={settings[key]} onChange={event => setSettings(current => ({...current,[key]:event.target.checked}))} className="h-4 w-4 accent-[var(--brand)]" /><span className="text-sm">{label}</span></label>)}</section>{events.length > 0 && <section className="mt-5 px-4"><div className="mb-2 flex items-center justify-between"><h2 className="text-sm font-bold">Son uyarılar</h2><button type="button" onClick={() => {setEvents([]);localStorage.removeItem('eary_environment_events');}} className="text-[10px] font-semibold text-rose-600">Temizle</button></div>{events.slice(0,6).map(event => <div key={event.id} className="flex items-center gap-3 border-b eary-line py-2.5"><BellRing size={17} className="eary-brand" /><div className="flex-1"><p className="text-xs font-semibold">{event.label}</p><p className="eary-muted text-[10px]">{new Date(event.timestamp).toLocaleTimeString('tr-TR')} · Güven %{Math.round(event.confidence*100)}</p></div></div>)}</section>}<div className="mx-4 mt-5 rounded-lg border border-amber-200 bg-amber-50 p-3 text-[10px] leading-4 text-amber-900">Bu özellik yardımcı bir erken uyarıdır; sertifikalı yangın, güvenlik veya bebek izleme cihazlarının yerine geçmez. Ham ses kaydedilmez veya sunucuya gönderilmez.</div></div></main>;
 }
 
-function AmbientListeningTool({ onBack }) {
+function CommunicationMode({ modeId, onBack }) {
+    const config = MODE_CONFIG[modeId];
     const [captions, setCaptions] = useState([]);
     const [interim, setInterim] = useState('');
     const [listening, setListening] = useState(false);
     const [saved, setSaved] = useState(false);
-    const [summaryOpen, setSummaryOpen] = useState(false);
-    const [summaryText, setSummaryText] = useState('');
-    const [contextId, setContextId] = useState(() => localStorage.getItem('eary_ambient_context') || 'general');
-    const [language, setLanguage] = useState(() => localStorage.getItem('eary_ambient_language') || getInitialAppLanguage());
+    const [showSummary, setShowSummary] = useState(false);
     const recognizerRef = useRef(null);
-    const scrollRef = useRef(null);
-    const desiredListeningRef = useRef(false);
-    const contextConfig = MODE_CONFIG[contextId] || MODE_CONFIG.general;
-    const keywords = [...new Set([...LISTENING_IMPORTANT_HINTS, ...contextConfig.groups.flatMap(group => group.keywords)])];
-    const importantLines = captions.filter(line => line.important);
-    const groupedCaptions = contextConfig.groups.map(group => ({
+    const Icon = config.icon;
+    const keywords = config.groups.flatMap(group => group.keywords);
+    const groupedCaptions = config.groups.map(group => ({
         ...group,
         lines: captions.filter(line => group.keywords.some(keyword => line.text.toLocaleLowerCase('tr-TR').includes(keyword)))
     }));
 
-    useEffect(() => () => {
-        desiredListeningRef.current = false;
-        recognizerRef.current?.abort?.();
-    }, []);
-    useEffect(() => localStorage.setItem('eary_ambient_context', contextId), [contextId]);
-    useEffect(() => localStorage.setItem('eary_ambient_language', language), [language]);
-    useEffect(() => {
-        if (scrollRef.current && !summaryOpen) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
-    }, [captions, interim, summaryOpen]);
-
-    const appendCaption = (rawText, confidence) => {
+    useEffect(() => () => recognizerRef.current?.abort?.(), []);
+    const appendCaption = (text, confidence) => {
         const now = Date.now();
-        const clean = cleanListeningText(rawText, language);
-        if (!clean) return;
-        const important = isImportantListeningText(clean, contextConfig);
         setCaptions(current => {
             const last = current[current.length - 1];
-            const shouldJoin = last && now - last.timestamp < 4500 && !important && !last.important && clean.length < 120;
-            if (shouldJoin) {
-                const mergedText = cleanListeningText(`${last.text} ${clean}`, language);
+            if (last && now - last.timestamp < 10000 && !last.important && !last.uncertain) {
                 return [...current.slice(0, -1), {
                     ...last,
-                    text: mergedText,
+                    text: `${last.text} ${text}`.replace(/\s+/g, ' ').trim(),
                     timestamp: now,
-                    uncertain: last.uncertain || (confidence != null && confidence < 0.62)
+                    uncertain: confidence != null && confidence < 0.62
                 }];
             }
-            return [...current, {
-                id: now,
-                text: clean,
-                rawText: rawText.trim(),
-                timestamp: now,
-                important,
-                uncertain: confidence != null && confidence < 0.62
-            }];
+            return [...current, { id: now, text, timestamp: now, important: false, uncertain: confidence != null && confidence < 0.62 }];
         });
     };
-
-    const startListening = async () => {
-        desiredListeningRef.current = true;
-        const recognizer = getDuoSpeechRecognizer(language, (finalText, interimText, confidence) => {
-            setInterim(interimText ? cleanListeningText(interimText, language).replace(/[.!?]$/, '') : '');
-            if (finalText?.trim()) {
-                appendCaption(finalText.trim(), confidence);
-                setInterim('');
-            }
-        }, () => {
-            setListening(false);
-            if (desiredListeningRef.current) {
-                setTimeout(() => {
-                    if (desiredListeningRef.current) startListening();
-                }, 450);
-            }
-        }, error => {
-            desiredListeningRef.current = false;
-            setListening(false);
-            setInterim(String(error?.message || 'Mikrofon başlatılamadı'));
-            setTimeout(() => setInterim(''), 2400);
-        });
-        recognizerRef.current = recognizer;
-        try {
-            await recognizer.start();
-            setListening(true);
-        } catch (error) {
-            setListening(false);
-            setInterim(String(error?.message || 'Mikrofon başlatılamadı'));
-            setTimeout(() => setInterim(''), 2400);
-        }
-    };
-
-    const stopListening = () => {
-        desiredListeningRef.current = false;
-        recognizerRef.current?.stop?.();
-        setListening(false);
-    };
-
     const toggleListening = () => {
-        if (listening) stopListening();
-        else startListening();
+        if (listening) { recognizerRef.current?.stop?.(); setListening(false); return; }
+        const recognizer = getDuoSpeechRecognizer('tr-TR', (finalText, interimText, confidence) => {
+            setInterim(interimText || '');
+            if (finalText?.trim()) appendCaption(finalText.trim(), confidence);
+        }, () => setListening(false), () => setListening(false));
+        recognizerRef.current = recognizer; recognizer?.start?.(); setListening(true);
     };
-
-    const refreshSummary = () => {
-        setSummaryText(summarizeListeningLines(captions));
-        setSummaryOpen(true);
-    };
-
+    const toggleFlag = (id, key) => setCaptions(current => current.map(line => line.id === id ? {...line,[key]:!line[key]} : line));
     const saveSession = () => {
         const sessions = loadJson('eary_caption_sessions', []);
         const summary = groupedCaptions.map(group => ({ title: group.title, lineIds: group.lines.map(line => line.id) }));
-        localStorage.setItem('eary_caption_sessions', JSON.stringify([{
-            id: Date.now(),
-            mode: 'ambient',
-            title: 'Ortam Dinleme',
-            context: contextId,
-            language,
-            createdAt: Date.now(),
-            captions,
-            summary,
-            importantNotes: importantLines
-        }, ...sessions].slice(0, 30)));
-        setSaved(true);
-        setTimeout(() => setSaved(false), 1800);
+        localStorage.setItem('eary_caption_sessions', JSON.stringify([{id:Date.now(),mode:modeId,title:config.title,createdAt:Date.now(),captions,summary},...sessions].slice(0,30)));
+        setSaved(true); setTimeout(() => setSaved(false), 1800);
     };
-
-    const toggleFlag = (id, key) => setCaptions(current => current.map(line => line.id === id ? { ...line, [key]: !line[key] } : line));
     const renderHighlighted = text => {
         const escaped = keywords.map(keyword => keyword.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
-        const pattern = escaped.length ? new RegExp(`(${escaped.join('|')})`, 'gi') : null;
-        if (!pattern) return text;
-        return text.split(pattern).map((part, index) => keywords.some(keyword => keyword.toLocaleLowerCase('tr-TR') === part.toLocaleLowerCase('tr-TR')) ? <mark key={index} className="rounded bg-amber-200 px-0.5">{part}</mark> : part);
+        const pattern = new RegExp(`(${escaped.join('|')})`, 'gi');
+        return text.split(pattern).map((part,index) => keywords.some(keyword => keyword.toLocaleLowerCase('tr-TR') === part.toLocaleLowerCase('tr-TR')) ? <mark key={index} className="rounded bg-amber-200 px-0.5">{part}</mark> : part);
     };
-
     return (
         <main className="eary-shell mx-auto flex h-screen w-full max-w-md flex-col overflow-hidden sm:h-[800px] sm:rounded-xl sm:border sm:eary-line">
             <header className="eary-ios-safe-header flex items-center gap-3 border-b eary-line px-4 pb-3">
                 <button type="button" onClick={onBack} className="eary-soft eary-muted flex h-10 w-10 items-center justify-center rounded-lg"><ArrowLeft size={20} /></button>
-                <span className="eary-brand-bg flex h-10 w-10 items-center justify-center rounded-lg"><Captions size={20} /></span>
-                <div className="min-w-0 flex-1">
-                    <h1 className="font-bold">Ortam Dinleme</h1>
-                    <p className="eary-muted truncate text-[10px]">Canlı metin, anlam düzeltme, özet ve önemli notlar</p>
-                </div>
-                <button onClick={refreshSummary} disabled={!captions.length} className={`flex h-10 w-10 items-center justify-center rounded-lg disabled:opacity-30 ${summaryOpen ? 'eary-brand-bg' : 'eary-soft eary-brand'}`} title="Özetle"><Sparkles size={18}/></button>
-                <button onClick={saveSession} disabled={!captions.length} className="eary-soft eary-brand flex h-10 w-10 items-center justify-center rounded-lg disabled:opacity-30" title="Oturumu kaydet">{saved ? <Check size={18}/> : <Save size={18}/>}</button>
+                <span className="flex h-10 w-10 items-center justify-center rounded-lg text-white" style={{background:config.color}}><Icon size={20}/></span>
+                <div className="min-w-0 flex-1"><h1 className="font-bold">{config.title} modu</h1><p className="eary-muted truncate text-[10px]">{config.prompt}</p></div>
+                <button onClick={()=>setShowSummary(value=>!value)} disabled={!captions.length} className={`flex h-10 w-10 items-center justify-center rounded-lg disabled:opacity-30 ${showSummary?'eary-brand-bg':'eary-soft eary-brand'}`} title="Oturum özeti"><History size={18}/></button>
+                <button onClick={saveSession} disabled={!captions.length} className="eary-soft eary-brand flex h-10 w-10 items-center justify-center rounded-lg disabled:opacity-30" title="Oturumu kaydet">{saved?<Check size={18}/>:<Save size={18}/>}</button>
             </header>
-
-            <section className="grid grid-cols-2 gap-2 border-b eary-line px-4 py-3">
-                <label className="block text-[10px] font-black uppercase eary-muted">Konuşma dili
-                    <select value={language} onChange={event => setLanguage(event.target.value)} disabled={listening} className="eary-input mt-1 w-full rounded-lg border px-2 py-2 text-xs font-bold normal-case disabled:opacity-60">
-                        {SUPPORTED_LANGUAGES.map(item => <option key={item.code} value={item.code}>{item.nativeLabel}</option>)}
-                    </select>
-                </label>
-                <label className="block text-[10px] font-black uppercase eary-muted">Bağlam
-                    <select value={contextId} onChange={event => setContextId(event.target.value)} className="eary-input mt-1 w-full rounded-lg border px-2 py-2 text-xs font-bold normal-case">
-                        {Object.entries(MODE_CONFIG).map(([id, config]) => <option key={id} value={id}>{config.title}</option>)}
-                    </select>
-                </label>
-            </section>
-
-            <div ref={scrollRef} className="flex-1 overflow-y-auto px-4 py-3">
-                {summaryOpen ? (
-                    <section className="space-y-3">
-                        <div className="flex items-start justify-between gap-3">
-                            <div><h2 className="text-lg font-bold">Canlı özet</h2><p className="eary-muted mt-1 text-[10px]">Mikrofon açıksa dinleme devam eder; bu panel konuşmayı durdurmaz.</p></div>
-                            <button type="button" onClick={() => setSummaryOpen(false)} className="eary-soft eary-muted rounded-lg px-3 py-2 text-[10px] font-bold">Metne dön</button>
+            <div className="flex-1 overflow-y-auto px-4 py-3">
+                {showSummary ? (
+                    <section>
+                        <div className="mb-4"><h2 className="text-lg font-bold">{config.title} özeti</h2><p className="eary-muted mt-1 text-[10px]">Otomatik gruplandırmayı görüşme sonrasında kontrol edin.</p></div>
+                        <div className="space-y-3">
+                            {groupedCaptions.map(group=><article key={group.title} className="rounded-lg border eary-line p-3"><div className="mb-2 flex items-center justify-between"><h3 className="text-sm font-bold">{group.title}</h3><span className="eary-brand-soft rounded-full px-2 py-0.5 text-[9px] font-bold">{group.lines.length}</span></div>{group.lines.length?group.lines.map(line=><p key={line.id} className="border-t eary-line py-2 text-xs leading-5">{line.text}</p>):<p className="eary-muted text-[10px]">Bu başlıkta bilgi algılanmadı.</p>}</article>)}
+                            <article className="rounded-lg border border-amber-200 bg-amber-50 p-3"><h3 className="text-sm font-bold text-amber-900">Önemli olarak kaydedilenler</h3>{captions.filter(line=>line.important).length?captions.filter(line=>line.important).map(line=><p key={line.id} className="mt-2 text-xs text-amber-900">• {line.text}</p>):<p className="mt-2 text-[10px] text-amber-800">Henüz yıldızlanan bölüm yok.</p>}</article>
                         </div>
-                        <article className="rounded-lg border border-emerald-200 bg-emerald-50 p-3">
-                            <h3 className="text-sm font-bold text-emerald-900">Kısa özet</h3>
-                            <p className="mt-2 text-sm leading-6 text-emerald-950">{summaryText || summarizeListeningLines(captions)}</p>
-                        </article>
-                        <article className="rounded-lg border border-amber-200 bg-amber-50 p-3">
-                            <h3 className="text-sm font-bold text-amber-900">Önemli notlar</h3>
-                            {importantLines.length ? importantLines.slice(-8).map(line => <p key={line.id} className="mt-2 text-xs leading-5 text-amber-900">• {line.text}</p>) : <p className="mt-2 text-[10px] text-amber-800">Henüz otomatik önemli not yakalanmadı.</p>}
-                        </article>
-                        {groupedCaptions.map(group => (
-                            <article key={group.title} className="rounded-lg border eary-line p-3">
-                                <div className="mb-2 flex items-center justify-between"><h3 className="text-sm font-bold">{group.title}</h3><span className="eary-brand-soft rounded-full px-2 py-0.5 text-[9px] font-bold">{group.lines.length}</span></div>
-                                {group.lines.length ? group.lines.slice(-4).map(line => <p key={line.id} className="border-t eary-line py-2 text-xs leading-5">{line.text}</p>) : <p className="eary-muted text-[10px]">Bu başlıkta bilgi algılanmadı.</p>}
-                            </article>
-                        ))}
                     </section>
-                ) : captions.length === 0 && !interim ? (
-                    <div className="flex h-full flex-col items-center justify-center text-center">
-                        <Captions size={36} className="eary-brand"/>
-                        <h2 className="mt-3 font-bold">Canlı altyazı hazır</h2>
-                        <p className="eary-muted mt-1 max-w-xs text-xs leading-5">Telefonu veya yaka mikrofonunu konuşan kişiye yaklaştırın. Mikrofon açık kaldığı sürece metin okunabilir paragraflara ayrılır.</p>
-                    </div>
+                ) : captions.length===0&&!interim ? (
+                    <div className="flex h-full flex-col items-center justify-center text-center"><Captions size={34} className="eary-brand"/><h2 className="mt-3 font-bold">Canlı altyazı hazır</h2><p className="eary-muted mt-1 max-w-xs text-xs leading-5">Telefonu veya mikrofonu konuşan kişiye yaklaştırın. Başlat düğmesine bir kez dokunun.</p></div>
                 ) : (
-                    <div className="space-y-3">
-                        {captions.map(line => (
-                            <article key={line.id} className={`rounded-lg border p-3 ${line.important ? 'border-amber-300 bg-amber-50' : 'eary-line eary-shell'}`}>
-                                <div className="mb-2 flex items-center justify-between gap-2">
-                                    <span className="eary-muted text-[9px] font-bold">{new Date(line.timestamp).toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit' })}</span>
-                                    <span className="flex gap-1">
-                                        <button onClick={() => toggleFlag(line.id, 'uncertain')} title="Anlaşılmadı olarak işaretle" className={`flex h-7 w-7 items-center justify-center rounded-md ${line.uncertain ? 'bg-rose-100 text-rose-700' : 'eary-soft eary-muted'}`}><CircleHelp size={14}/></button>
-                                        <button onClick={() => toggleFlag(line.id, 'important')} title="Önemli" className={`flex h-7 w-7 items-center justify-center rounded-md ${line.important ? 'bg-amber-200 text-amber-800' : 'eary-soft eary-muted'}`}><Star size={14} className={line.important ? 'fill-current' : ''}/></button>
-                                    </span>
-                                </div>
-                                <p className={`text-[15px] font-semibold leading-7 ${line.uncertain ? 'decoration-rose-500 decoration-wavy underline' : ''}`}>{renderHighlighted(line.text)}</p>
-                                {line.rawText && line.rawText !== line.text && <p className="eary-muted mt-2 text-[9px]">Düzeltilmiş metin · Ham: {line.rawText}</p>}
-                            </article>
-                        ))}
-                        {interim && <div className="rounded-lg border border-dashed eary-line p-3 text-sm italic eary-muted">{interim}</div>}
-                    </div>
+                    <div className="space-y-3">{captions.map(line=><article key={line.id} className={`rounded-lg border p-3 ${line.important?'border-amber-300 bg-amber-50':'eary-line eary-shell'}`}><div className="mb-1 flex justify-end gap-1"><button onClick={()=>toggleFlag(line.id,'uncertain')} title="Anlaşılmadı olarak işaretle" className={`flex h-7 w-7 items-center justify-center rounded-md ${line.uncertain?'bg-rose-100 text-rose-700':'eary-soft eary-muted'}`}><CircleHelp size={14}/></button><button onClick={()=>toggleFlag(line.id,'important')} title="Önemli" className={`flex h-7 w-7 items-center justify-center rounded-md ${line.important?'bg-amber-200 text-amber-800':'eary-soft eary-muted'}`}><Star size={14} className={line.important?'fill-current':''}/></button></div><p className={`text-sm leading-6 ${line.uncertain?'decoration-rose-500 decoration-wavy underline':''}`}>{renderHighlighted(line.text)}</p>{line.uncertain&&<p className="mt-1 text-[9px] font-semibold text-rose-600">Bu bölüm anlaşılmamış olabilir; tekrar isteyin.</p>}</article>)}{interim&&<div className="rounded-lg border border-dashed eary-line p-3 text-sm italic eary-muted">{interim}</div>}</div>
                 )}
             </div>
-
             <div className="border-t eary-line bg-[var(--surface)] px-3 py-3">
-                <div className="mb-3 flex items-center justify-between gap-2">
-                    <div className="min-w-0">
-                        <p className="text-xs font-bold">{listening ? 'Mikrofon açık' : 'Mikrofon kapalı'}</p>
-                        <p className="eary-muted truncate text-[10px]">{getLanguageLabel(language)} · {contextConfig.title} bağlamı</p>
-                    </div>
-                    <button type="button" onClick={toggleListening} className={`flex h-12 w-12 shrink-0 items-center justify-center rounded-full text-white shadow-lg ${listening ? 'bg-rose-600' : 'eary-brand-bg'}`}>{listening ? <StopCircle size={24}/> : <Mic size={24}/>}</button>
-                </div>
-                <div className="flex gap-2 overflow-x-auto">
-                    {contextConfig.phrases.map(phrase => <button key={phrase} onClick={() => speakTurkish(phrase)} className="eary-soft eary-brand shrink-0 rounded-full px-3 py-2 text-[10px] font-bold">{phrase}</button>)}
-                </div>
+                <div className="mb-3 flex gap-2 overflow-x-auto">{config.phrases.map(phrase=><button key={phrase} onClick={()=>speakTurkish(phrase)} className="eary-soft eary-brand shrink-0 rounded-full px-3 py-2 text-[10px] font-bold">{phrase}</button>)}</div>
+                <button onClick={toggleListening} className={`mx-auto flex h-14 w-14 items-center justify-center rounded-full text-white shadow-lg ${listening?'bg-rose-600':'eary-brand-bg'}`}>{listening?<StopCircle size={24}/>:<Mic size={24}/>}</button>
+                <p className="eary-muted mt-1 text-center text-[9px] font-bold">{listening?'BİTİRMEK İÇİN TEKRAR DOKUN':'CANLI ALTYAZIYI BAŞLAT'}</p>
             </div>
         </main>
     );
@@ -821,6 +627,7 @@ function EmergencyCard({ nickname, onBack }) {
 
 export default function AccessibilityHub({ account, onOpenChats, onOpenSettings }) {
     const [view, setView] = useState('home');
+    const [mode, setMode] = useState(null);
     const [quickContacts, setQuickContacts] = useState(() => loadJson('eary_quick_contacts', []));
     const [newContact, setNewContact] = useState({name:'',phone:''});
     const [showContacts, setShowContacts] = useState(false);
@@ -830,6 +637,9 @@ export default function AccessibilityHub({ account, onOpenChats, onOpenSettings 
             if (showContacts) {
                 event.preventDefault();
                 setShowContacts(false);
+            } else if (mode) {
+                event.preventDefault();
+                setMode(null);
             } else if (view !== 'home') {
                 event.preventDefault();
                 setView('home');
@@ -837,68 +647,11 @@ export default function AccessibilityHub({ account, onOpenChats, onOpenSettings 
         };
         window.addEventListener('eary:back', handleBack);
         return () => window.removeEventListener('eary:back', handleBack);
-    }, [showContacts, view]);
+    }, [mode, showContacts, view]);
     if (view==='environment') return <EnvironmentMonitor onBack={()=>setView('home')}/>;
-    if (view==='ambient') return <AmbientListeningTool onBack={()=>setView('home')}/>;
     if (view==='emergency') return <EmergencyCard nickname={account?.nickname} onBack={()=>setView('home')}/>;
     if (view==='face') return <FaceToFaceTool onBack={()=>setView('home')}/>;
+    if (mode) return <CommunicationMode modeId={mode} onBack={()=>setMode(null)}/>;
     const addContact=()=>{if(!newContact.name.trim()||!newContact.phone.trim())return;const next=[...quickContacts,{id:Date.now(),...newContact}];setQuickContacts(next);localStorage.setItem('eary_quick_contacts',JSON.stringify(next));setNewContact({name:'',phone:''});};
-    return (
-        <main className="eary-shell eary-line relative mx-auto flex h-screen w-full max-w-md flex-col overflow-hidden sm:h-[780px] sm:rounded-xl sm:border sm:shadow-xl">
-            <header className="eary-ios-safe-header border-b eary-line px-4 pb-4">
-                <div className="flex items-center justify-between">
-                    <div>
-                        <p className="eary-brand text-[10px] font-black uppercase">Eary Erişilebilirlik</p>
-                        <h1 className="mt-1 text-xl font-bold">Bugün nasıl yardımcı olayım?</h1>
-                    </div>
-                    <button type="button" onClick={onOpenSettings} className="eary-soft eary-muted flex h-10 w-10 items-center justify-center rounded-lg"><UserRound size={20}/></button>
-                </div>
-            </header>
-            <div className="flex-1 overflow-y-auto pb-24">
-                <section className="grid grid-cols-2 gap-2 p-4">
-                    <button type="button" onClick={()=>setView('ambient')} className="col-span-2 flex items-center gap-4 rounded-lg bg-[#176b5b] p-4 text-left text-white shadow-sm">
-                        <span className="flex h-12 w-12 items-center justify-center rounded-lg bg-white/12"><Captions size={24}/></span>
-                        <span className="flex-1">
-                            <span className="block text-base font-bold">Ortam Dinleme</span>
-                            <span className="mt-1 block text-[10px] leading-4 text-white/75">Sınıf, toplantı veya yaka mikrofonu ile canlı metin, anlam düzeltme, özet ve önemli notlar</span>
-                        </span>
-                        <ChevronRight size={18}/>
-                    </button>
-                    <button type="button" onClick={()=>setView('environment')} className="col-span-2 flex items-center gap-4 rounded-lg bg-[#172f29] p-4 text-left text-white">
-                        <span className="flex h-12 w-12 items-center justify-center rounded-lg bg-white/10"><BellRing size={23}/></span>
-                        <span className="flex-1"><span className="block text-sm font-bold">Çevresel Ses Uyarıları</span><span className="mt-1 block text-[10px] leading-4 text-white/70">Zil, alarm, korna ve isminiz için titreşimli bildirim</span></span>
-                        <ChevronRight size={18}/>
-                    </button>
-                    <button type="button" onClick={()=>setView('face')} className="col-span-2 flex items-center gap-4 rounded-lg border border-violet-200 bg-violet-50 p-4 text-left text-violet-900">
-                        <span className="flex h-12 w-12 items-center justify-center rounded-lg bg-white"><PanelsTopLeft size={23}/></span>
-                        <span className="flex-1"><span className="block text-sm font-bold">Yüz yüze sohbet başlat</span><span className="mt-1 block text-[10px] leading-4 text-violet-700/80">Aynı masadaki iki kişi için ikiye ayrılmış yerel ekran</span></span>
-                        <ChevronRight size={18}/>
-                    </button>
-                    <button type="button" onClick={()=>setView('emergency')} className="flex min-h-28 flex-col justify-between rounded-lg border border-red-200 bg-red-50 p-3 text-left text-red-800"><ShieldAlert size={22}/><span><span className="block text-sm font-bold">Acil Kart</span><span className="text-[9px]">Tek dokunuşla büyük yazı</span></span></button>
-                    <button type="button" onClick={()=>setShowContacts(true)} className="flex min-h-28 flex-col justify-between rounded-lg border border-sky-200 bg-sky-50 p-3 text-left text-sky-800"><ContactRound size={22}/><span><span className="block text-sm font-bold">Hızlı Bağlantı</span><span className="text-[9px]">Yakın veya tercüman ara</span></span></button>
-                </section>
-
-                {captionSessions.length>0&&<section className="mt-2 px-4">
-                    <div className="mb-2 flex items-center gap-2"><History size={17} className="eary-brand"/><h2 className="text-sm font-bold">Ortam dinleme geçmişi</h2></div>
-                    {captionSessions.slice(0,4).map(session=><div key={session.id} className="flex items-center gap-3 border-b eary-line py-3"><Captions size={17} className="eary-muted"/><div className="flex-1"><p className="text-xs font-semibold">{session.title}</p><p className="eary-muted text-[9px]">{new Date(session.createdAt).toLocaleString('tr-TR')} · {session.captions.length} paragraf · {session.captions.filter(line=>line.important).length} önemli</p></div></div>)}
-                </section>}
-
-                <div className="mx-4 mt-5 rounded-lg border eary-line p-3">
-                    <div className="flex gap-3"><Sparkles size={18} className="eary-brand shrink-0"/><p className="eary-muted text-[10px] leading-4">Ortam dinleme konuşmayı daha okunur hâle getirir; ham ses kaydı yapmaz. Özet paneli açıldığında mikrofon dinlemeye devam eder.</p></div>
-                </div>
-            </div>
-            <nav className="eary-shell absolute bottom-0 left-0 right-0 grid grid-cols-3 border-t eary-line px-3 pb-[max(10px,env(safe-area-inset-bottom))] pt-2">
-                <button type="button" className="eary-brand flex flex-col items-center gap-1 text-[10px] font-bold"><Sparkles size={20}/>Erişim</button>
-                <button type="button" onClick={onOpenChats} className="eary-muted flex flex-col items-center gap-1 text-[10px] font-semibold"><MessageCircle size={20}/>Sohbetler</button>
-                <button type="button" onClick={onOpenSettings} className="eary-muted flex flex-col items-center gap-1 text-[10px] font-semibold"><UserRound size={20}/>Profil</button>
-            </nav>
-            {showContacts&&<div className="absolute inset-0 z-50 flex items-end bg-black/35" onClick={()=>setShowContacts(false)}>
-                <section className="eary-shell w-full rounded-t-xl p-4" onClick={event=>event.stopPropagation()}>
-                    <div className="mb-4 flex items-center justify-between"><div><h2 className="font-bold">Hızlı bağlantı</h2><p className="eary-muted text-[10px]">Yakınınız veya işaret dili tercümanı</p></div><button type="button" onClick={()=>setShowContacts(false)} className="eary-soft eary-muted flex h-9 w-9 items-center justify-center rounded-lg"><X size={18}/></button></div>
-                    <div className="max-h-48 overflow-y-auto">{quickContacts.map(contact=><div key={contact.id} className="flex items-center gap-3 border-b eary-line py-3"><ContactRound size={18} className="eary-brand"/><p className="flex-1 text-sm font-semibold">{contact.name}</p><a href={`tel:${contact.phone}`} className="eary-brand-bg rounded-lg px-3 py-2 text-xs font-bold">Ara</a></div>)}</div>
-                    <div className="mt-4 grid grid-cols-[1fr_1fr_auto] gap-2"><input value={newContact.name} onChange={event=>setNewContact(current=>({...current,name:event.target.value}))} placeholder="Ad" className="eary-input min-w-0 rounded-lg border px-3 py-2 text-xs"/><input value={newContact.phone} onChange={event=>setNewContact(current=>({...current,phone:event.target.value}))} placeholder="Telefon" type="tel" className="eary-input min-w-0 rounded-lg border px-3 py-2 text-xs"/><button type="button" onClick={addContact} className="eary-brand-bg rounded-lg px-3 text-xs font-bold">Ekle</button></div>
-                </section>
-            </div>}
-        </main>
-    );
+    return <main className="eary-shell eary-line relative mx-auto flex h-screen w-full max-w-md flex-col overflow-hidden sm:h-[780px] sm:rounded-xl sm:border sm:shadow-xl"><header className="eary-ios-safe-header border-b eary-line px-4 pb-4"><div className="flex items-center justify-between"><div><p className="eary-brand text-[10px] font-black uppercase">Eary Erişilebilirlik</p><h1 className="mt-1 text-xl font-bold">Bugün nasıl yardımcı olayım?</h1></div><button type="button" onClick={onOpenSettings} className="eary-soft eary-muted flex h-10 w-10 items-center justify-center rounded-lg"><UserRound size={20}/></button></div></header><div className="flex-1 overflow-y-auto pb-24"><section className="grid grid-cols-2 gap-2 p-4"><button type="button" onClick={()=>setView('environment')} className="col-span-2 flex items-center gap-4 rounded-lg bg-[#172f29] p-4 text-left text-white"><span className="flex h-12 w-12 items-center justify-center rounded-lg bg-white/10"><BellRing size={23}/></span><span className="flex-1"><span className="block text-sm font-bold">Çevresel Ses Uyarıları</span><span className="mt-1 block text-[10px] leading-4 text-white/70">Zil, alarm, korna ve isminiz için titreşimli bildirim</span></span><ChevronRight size={18}/></button><button type="button" onClick={()=>setView('face')} className="col-span-2 flex items-center gap-4 rounded-lg border border-violet-200 bg-violet-50 p-4 text-left text-violet-900"><span className="flex h-12 w-12 items-center justify-center rounded-lg bg-white"><PanelsTopLeft size={23}/></span><span className="flex-1"><span className="block text-sm font-bold">Yüz yüze sohbet başlat</span><span className="mt-1 block text-[10px] leading-4 text-violet-700/80">Aynı masadaki iki kişi için ikiye ayrılmış yerel ekran</span></span><ChevronRight size={18}/></button><button type="button" onClick={()=>setView('emergency')} className="flex min-h-28 flex-col justify-between rounded-lg border border-red-200 bg-red-50 p-3 text-left text-red-800"><ShieldAlert size={22}/><span><span className="block text-sm font-bold">Acil Kart</span><span className="text-[9px]">Tek dokunuşla büyük yazı</span></span></button><button type="button" onClick={()=>setShowContacts(true)} className="flex min-h-28 flex-col justify-between rounded-lg border border-sky-200 bg-sky-50 p-3 text-left text-sky-800"><ContactRound size={22}/><span><span className="block text-sm font-bold">Hızlı Bağlantı</span><span className="text-[9px]">Yakın veya tercüman ara</span></span></button></section><section className="px-4"><div className="mb-3"><h2 className="text-sm font-bold">İletişim modları</h2><p className="eary-muted text-[10px]">Ortama göre önemli bilgileri yakalayın</p></div><div className="grid grid-cols-2 gap-2">{Object.entries(MODE_CONFIG).map(([id,config])=>{const Icon=config.icon;return <button key={id} type="button" onClick={()=>setMode(id)} className="eary-row flex min-h-24 flex-col justify-between rounded-lg border eary-line p-3 text-left"><Icon size={21} style={{color:config.color}}/><span><span className="block text-sm font-bold">{config.title}</span><span className="eary-muted line-clamp-2 text-[9px] leading-3">{config.prompt}</span></span></button>;})}</div></section>{captionSessions.length>0&&<section className="mt-5 px-4"><div className="mb-2 flex items-center gap-2"><History size={17} className="eary-brand"/><h2 className="text-sm font-bold">Canlı altyazı geçmişi</h2></div>{captionSessions.slice(0,4).map(session=><div key={session.id} className="flex items-center gap-3 border-b eary-line py-3"><Captions size={17} className="eary-muted"/><div className="flex-1"><p className="text-xs font-semibold">{session.title}</p><p className="eary-muted text-[9px]">{new Date(session.createdAt).toLocaleString('tr-TR')} · {session.captions.length} bölüm · {session.captions.filter(line=>line.important).length} önemli</p></div></div>)}</section>}<div className="mx-4 mt-5 rounded-lg border eary-line p-3"><div className="flex gap-3"><Sparkles size={18} className="eary-brand shrink-0"/><p className="eary-muted text-[10px] leading-4">Canlı altyazılar ve kayıtlar bu cihazda tutulur. Eary tıbbi, hukuki veya güvenlik kararı vermez; iletişimi daha görünür hâle getirir.</p></div></div></div><nav className="eary-shell absolute bottom-0 left-0 right-0 grid grid-cols-3 border-t eary-line px-3 pb-[max(10px,env(safe-area-inset-bottom))] pt-2"><button type="button" className="eary-brand flex flex-col items-center gap-1 text-[10px] font-bold"><Sparkles size={20}/>Erişim</button><button type="button" onClick={onOpenChats} className="eary-muted flex flex-col items-center gap-1 text-[10px] font-semibold"><MessageCircle size={20}/>Sohbetler</button><button type="button" onClick={onOpenSettings} className="eary-muted flex flex-col items-center gap-1 text-[10px] font-semibold"><UserRound size={20}/>Profil</button></nav>{showContacts&&<div className="absolute inset-0 z-50 flex items-end bg-black/35" onClick={()=>setShowContacts(false)}><section className="eary-shell w-full rounded-t-xl p-4" onClick={event=>event.stopPropagation()}><div className="mb-4 flex items-center justify-between"><div><h2 className="font-bold">Hızlı bağlantı</h2><p className="eary-muted text-[10px]">Yakınınız veya işaret dili tercümanı</p></div><button type="button" onClick={()=>setShowContacts(false)} className="eary-soft eary-muted flex h-9 w-9 items-center justify-center rounded-lg"><X size={18}/></button></div><div className="max-h-48 overflow-y-auto">{quickContacts.map(contact=><div key={contact.id} className="flex items-center gap-3 border-b eary-line py-3"><ContactRound size={18} className="eary-brand"/><p className="flex-1 text-sm font-semibold">{contact.name}</p><a href={`tel:${contact.phone}`} className="eary-brand-bg rounded-lg px-3 py-2 text-xs font-bold">Ara</a></div>)}</div><div className="mt-4 grid grid-cols-[1fr_1fr_auto] gap-2"><input value={newContact.name} onChange={event=>setNewContact(current=>({...current,name:event.target.value}))} placeholder="Ad" className="eary-input min-w-0 rounded-lg border px-3 py-2 text-xs"/><input value={newContact.phone} onChange={event=>setNewContact(current=>({...current,phone:event.target.value}))} placeholder="Telefon" type="tel" className="eary-input min-w-0 rounded-lg border px-3 py-2 text-xs"/><button type="button" onClick={addContact} className="eary-brand-bg rounded-lg px-3 text-xs font-bold">Ekle</button></div></section></div>}</main>;
 }

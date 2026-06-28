@@ -19,35 +19,17 @@ const firebaseConfig = {
 
 export const databaseURL = firebaseConfig.databaseURL;
 
-// Initialize Firebase
-const app = initializeApp(firebaseConfig);
-export const db = getDatabase(app);
-export const storage = getStorage(app);
-export const auth = getAuth(app);
-
 const encodeDatabasePath = path => path
   .split('/')
   .filter(Boolean)
   .map(segment => encodeURIComponent(segment))
   .join('/');
 
-const getAuthQuery = async () => {
-  const user = auth.currentUser;
-  if (!user) return '';
-  try {
-    const token = await user.getIdToken();
-    return token ? `&auth=${encodeURIComponent(token)}` : '';
-  } catch (error) {
-    console.warn('Firebase REST auth token unavailable:', error);
-    return '';
-  }
-};
-
 export const getRest = async (path, { timeoutMs = 8000 } = {}) => {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const response = await fetch(`${databaseURL}/${encodeDatabasePath(path)}.json?_=${Date.now()}${await getAuthQuery()}`, {
+    const response = await fetch(`${databaseURL}/${encodeDatabasePath(path)}.json?_=${Date.now()}`, {
       cache: 'no-store',
       signal: controller.signal
     });
@@ -62,7 +44,7 @@ export const getRest = async (path, { timeoutMs = 8000 } = {}) => {
 };
 
 export const updateRest = async updates => {
-  const response = await fetch(`${databaseURL}/.json?_=${Date.now()}${await getAuthQuery()}`, {
+  const response = await fetch(`${databaseURL}/.json?_=${Date.now()}`, {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(updates),
@@ -71,6 +53,12 @@ export const updateRest = async updates => {
   if (!response.ok) throw new Error(`Firebase REST update failed: ${response.status}`);
   return response.json();
 };
+
+// Initialize Firebase
+const app = initializeApp(firebaseConfig);
+export const db = getDatabase(app);
+export const storage = getStorage(app);
+export const auth = getAuth(app);
 
 // Helper database references and functions
 export { ref, set, onValue, onDisconnect, push, remove, get, update, query, limitToLast, orderByKey };
