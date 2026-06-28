@@ -161,12 +161,11 @@ class NativeSpeechRecognizer {
                     this.isStartingOrRestarting = false;
                 }
                 if (data && data.state === "stopped" && this.isListening) {
-                    if (Capacitor.getPlatform() === 'ios') {
-                        this.isListening = false;
-                        this.isStartingOrRestarting = false;
-                        this.onEnd();
-                        return;
+                    if (this.lastPartialText.trim()) {
+                        this.onResult(this.lastPartialText.trim(), "");
+                        this.lastPartialText = '';
                     }
+                    this.isStartingOrRestarting = false;
                     this.scheduleRestart();
                 }
             });
@@ -176,13 +175,8 @@ class NativeSpeechRecognizer {
                 console.error("Native SpeechRecognition Error Event:", data);
                 if (this.isListening) {
                     const errorMsg = data.message || data.error || "";
-                    if (Capacitor.getPlatform() === 'ios') {
-                        this.isListening = false;
-                        this.isStartingOrRestarting = false;
-                        this.onError(errorMsg || "Speech Recognition Error");
-                        return;
-                    }
                     if (isRecoverableNativeSpeechError(data)) {
+                        this.isStartingOrRestarting = false;
                         this.scheduleRestart();
                         return;
                     }
@@ -215,15 +209,11 @@ class NativeSpeechRecognizer {
                 continuousPTT: Capacitor.getPlatform() !== 'ios',
                 useOnDeviceRecognition
             });
+            this.isStartingOrRestarting = false;
 
         } catch (err) {
             this.isStartingOrRestarting = false;
             if (this.isListening) {
-                if (Capacitor.getPlatform() === 'ios') {
-                    this.isListening = false;
-                    this.onError(err);
-                    return;
-                }
                 if (isRecoverableNativeSpeechError(err)) {
                     this.scheduleRestart();
                     return;
@@ -276,6 +266,7 @@ class NativeSpeechRecognizer {
                 continuousPTT: Capacitor.getPlatform() !== 'ios',
                 useOnDeviceRecognition: this.useOnDeviceRecognition
             });
+            this.isStartingOrRestarting = false;
         } catch (e) {
             console.error("Error restarting speech recognition:", e);
             this.isStartingOrRestarting = false;
