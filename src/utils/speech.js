@@ -206,7 +206,7 @@ class NativeSpeechRecognizer {
                 popup: false,
                 addPunctuation: true,
                 allowForSilence: 3000,
-                continuousPTT: Capacitor.getPlatform() !== 'ios',
+                continuousPTT: true,
                 useOnDeviceRecognition
             });
             this.isStartingOrRestarting = false;
@@ -263,7 +263,7 @@ class NativeSpeechRecognizer {
                 popup: false,
                 addPunctuation: true,
                 allowForSilence: 3000,
-                continuousPTT: Capacitor.getPlatform() !== 'ios',
+                continuousPTT: true,
                 useOnDeviceRecognition: this.useOnDeviceRecognition
             });
             this.isStartingOrRestarting = false;
