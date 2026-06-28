@@ -30,8 +30,7 @@ const MODE_CONFIG = {
             { title: 'Yapılacaklar', keywords: ['yapın', 'hazırlayın', 'gönderin', 'getirin', 'kontrol edin'] },
             { title: 'Eğitim ve toplantı notları', keywords: ['ders', 'konu', 'ödev', 'sınav', 'proje', 'karar', 'görev', 'sorumlu'] },
             { title: 'Sağlık ve resmi bilgiler', keywords: ['ilaç', 'doz', 'kontrol', 'randevu', 'belge', 'evrak', 'ücret', 'başvuru'] }
-        ],
-        phrases: ['Tekrar eder misiniz?', 'Biraz yavaş konuşabilir misiniz?', 'Bunu yazılı olarak paylaşır mısınız?']
+        ]
     }
 };
 
@@ -518,20 +517,20 @@ function AmbientListeningTool({ onBack }) {
 
     return (
         <main className="eary-shell mx-auto flex h-screen w-full max-w-md flex-col overflow-hidden sm:h-[800px] sm:rounded-xl sm:border sm:eary-line">
-            <header className="eary-ios-safe-header flex items-center gap-3 border-b eary-line px-4 pb-3">
-                <button type="button" onClick={onBack} className="eary-soft eary-muted flex h-10 w-10 items-center justify-center rounded-lg"><ArrowLeft size={20} /></button>
-                <span className="eary-brand-bg flex h-10 w-10 items-center justify-center rounded-lg"><Captions size={20} /></span>
+            <header className="eary-ios-safe-header flex items-center gap-2 border-b eary-line px-4 pb-2">
+                <button type="button" onClick={onBack} className="eary-soft eary-muted flex h-9 w-9 items-center justify-center rounded-lg"><ArrowLeft size={19} /></button>
+                <span className="eary-brand-bg flex h-9 w-9 items-center justify-center rounded-lg"><Captions size={18} /></span>
                 <div className="min-w-0 flex-1">
-                    <h1 className="font-bold">Ortam Dinleme</h1>
-                    <p className="eary-muted truncate text-[10px]">Canlı metin, anlam düzeltme, özet ve önemli notlar</p>
+                    <h1 className="truncate text-base font-bold">Ortam Dinleme</h1>
+                    <p className="eary-muted truncate text-[9px]">Canlı metin, özet ve önemli notlar</p>
                 </div>
-                <button onClick={refreshSummary} disabled={!captions.length} className={`flex h-10 w-10 items-center justify-center rounded-lg disabled:opacity-30 ${summaryOpen ? 'eary-brand-bg' : 'eary-soft eary-brand'}`} title="Özetle"><Sparkles size={18}/></button>
-                <button onClick={saveSession} disabled={!captions.length} className="eary-soft eary-brand flex h-10 w-10 items-center justify-center rounded-lg disabled:opacity-30" title="Oturumu kaydet">{saved ? <Check size={18}/> : <Save size={18}/>}</button>
+                <button onClick={refreshSummary} disabled={!captions.length} className={`flex h-9 w-9 items-center justify-center rounded-lg disabled:opacity-30 ${summaryOpen ? 'eary-brand-bg' : 'eary-soft eary-brand'}`} title="Özetle"><Sparkles size={17}/></button>
+                <button onClick={saveSession} disabled={!captions.length} className="eary-soft eary-brand flex h-9 w-9 items-center justify-center rounded-lg disabled:opacity-30" title="Oturumu kaydet">{saved ? <Check size={17}/> : <Save size={17}/>}</button>
             </header>
 
-            <section className="border-b eary-line px-4 py-3">
+            <section className="border-b eary-line px-4 py-2">
                 <label className="block text-[10px] font-black uppercase eary-muted">Konuşma dili
-                    <select value={language} onChange={event => setLanguage(event.target.value)} disabled={listening} className="eary-input mt-1 w-full rounded-lg border px-2 py-2 text-xs font-bold normal-case disabled:opacity-60">
+                    <select value={language} onChange={event => setLanguage(event.target.value)} disabled={listening} className="eary-input mt-1 w-full rounded-lg border px-2 py-1.5 text-xs font-bold normal-case disabled:opacity-60">
                         {SUPPORTED_LANGUAGES.map(item => <option key={item.code} value={item.code}>{item.nativeLabel}</option>)}
                     </select>
                 </label>
@@ -590,16 +589,13 @@ function AmbientListeningTool({ onBack }) {
                 )}
             </div>
 
-            <div className="border-t eary-line bg-[var(--surface)] px-3 py-3">
-                <div className="mb-3 flex items-center justify-between gap-2">
+            <div className="border-t eary-line bg-[var(--surface)] px-4 py-2">
+                <div className="flex items-center justify-between gap-3">
                     <div className="min-w-0">
-                        <p className="text-xs font-bold">{listening ? 'Mikrofon açık' : 'Mikrofon kapalı'}</p>
-                        <p className="eary-muted truncate text-[10px]">{getLanguageLabel(language)} · {contextConfig.title} bağlamı</p>
+                        <p className="text-xs font-bold">{listening ? 'Dinleme açık' : 'Dinleme kapalı'}</p>
+                        <p className="eary-muted truncate text-[10px]">{getLanguageLabel(language)}</p>
                     </div>
                     <button type="button" onClick={toggleListening} className={`flex h-12 w-12 shrink-0 items-center justify-center rounded-full text-white shadow-lg ${listening ? 'bg-rose-600' : 'eary-brand-bg'}`}>{listening ? <StopCircle size={24}/> : <Mic size={24}/>}</button>
-                </div>
-                <div className="flex gap-2 overflow-x-auto">
-                    {contextConfig.phrases.map(phrase => <button key={phrase} onClick={() => speakTurkish(phrase)} className="eary-soft eary-brand shrink-0 rounded-full px-3 py-2 text-[10px] font-bold">{phrase}</button>)}
                 </div>
             </div>
         </main>
