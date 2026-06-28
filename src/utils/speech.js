@@ -22,6 +22,12 @@ const isRecoverableNativeSpeechError = error => {
         .some(token => value.includes(token));
 };
 
+const normalizeSpeechChunk = text => String(text || '')
+    .toLocaleLowerCase('tr-TR')
+    .replace(/[^\p{L}\p{N}]+/gu, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+
 class WebSpeechRecognizer {
     constructor(language, onResult, onEnd, onError) {
         const SpeechRecognitionClass = window.SpeechRecognition || window.webkitSpeechRecognition;
@@ -112,6 +118,9 @@ class NativeSpeechRecognizer {
         this.restartTimer = null;
         this.startedAt = 0;
         this.useOnDeviceRecognition = false;
+        this.lastInterimText = '';
+        this.lastFinalText = '';
+        this.lastFinalAt = 0;
     }
 
     async start() {
@@ -140,6 +149,7 @@ class NativeSpeechRecognizer {
 
             this.isListening = true;
             this.lastPartialText = '';
+            this.lastInterimText = '';
             this.isStartingOrRestarting = true;
             this.startedAt = Date.now();
 
@@ -148,9 +158,20 @@ class NativeSpeechRecognizer {
             // 2. Register listener for native partial transcription updates
             this.listener = await SpeechRecognition.addListener("partialResults", (data) => {
                 if (data && data.matches && data.matches.length > 0) {
-                    const text = data.matches[0];
+                    const text = String(data.matches[0] || '').trim();
+                    if (!text) return;
+
+                    const isSegmentFinal = Boolean(data.isRestarting || data.forced);
+                    if (isSegmentFinal) {
+                        this.finalizeNativeChunk(text);
+                        return;
+                    }
+
+                    if (this.isStaleNativeChunk(text)) return;
+                    if (text === this.lastInterimText) return;
+
                     this.lastPartialText = text;
-                    // Treat matches[0] as interim preview text
+                    this.lastInterimText = text;
                     this.onResult("", text);
                 }
             });
@@ -161,10 +182,13 @@ class NativeSpeechRecognizer {
                     this.isStartingOrRestarting = false;
                 }
                 if (data && data.state === "stopped" && this.isListening) {
-                    if (this.lastPartialText.trim()) {
-                        this.onResult(this.lastPartialText.trim(), "");
+                    if (Capacitor.getPlatform() === 'ios' && data.reason === 'results') {
                         this.lastPartialText = '';
+                        this.lastInterimText = '';
+                        this.isStartingOrRestarting = false;
+                        return;
                     }
+                    this.finalizeNativeChunk(this.lastPartialText);
                     this.isStartingOrRestarting = false;
                     this.scheduleRestart();
                 }
@@ -224,6 +248,33 @@ class NativeSpeechRecognizer {
         }
     }
 
+    isStaleNativeChunk(text) {
+        const normalizedText = normalizeSpeechChunk(text);
+        const normalizedFinal = normalizeSpeechChunk(this.lastFinalText);
+        return Boolean(
+            normalizedText &&
+            normalizedFinal &&
+            normalizedText === normalizedFinal &&
+            Date.now() - this.lastFinalAt < 4000
+        );
+    }
+
+    finalizeNativeChunk(text) {
+        const finalText = String(text || '').trim();
+        if (!finalText) return false;
+        if (this.isStaleNativeChunk(finalText)) {
+            this.lastPartialText = '';
+            this.lastInterimText = '';
+            return false;
+        }
+        this.lastFinalText = finalText;
+        this.lastFinalAt = Date.now();
+        this.lastPartialText = '';
+        this.lastInterimText = '';
+        this.onResult(finalText, "");
+        return true;
+    }
+
     scheduleRestart() {
         if (!this.isListening || this.restartTimer) return;
         const remainingGracePeriod = Math.max(0, 1200 - (Date.now() - this.startedAt));
@@ -250,10 +301,7 @@ class NativeSpeechRecognizer {
             }
 
             // Finalize the last partial text if any
-            if (this.lastPartialText.trim()) {
-                this.onResult(this.lastPartialText.trim(), "");
-                this.lastPartialText = '';
-            }
+            this.finalizeNativeChunk(this.lastPartialText);
             
             // Restart native Speech Recognition silently
             await SpeechRecognition.start({
@@ -287,13 +335,11 @@ class NativeSpeechRecognizer {
             const cached = await SpeechRecognition.getLastPartialResult();
             await SpeechRecognition.forceStop({ timeout: 1000 });
             const finalText = String(cached?.text || this.lastPartialText || '').trim();
-            if (finalText) this.onResult(finalText, "");
+            this.finalizeNativeChunk(finalText);
         } catch (e) {
             console.error("Error stopping Speech Recognition:", e);
             // Fallback in case of error
-            if (this.lastPartialText.trim()) {
-                this.onResult(this.lastPartialText.trim(), "");
-            }
+            this.finalizeNativeChunk(this.lastPartialText);
         }
 
         try {
@@ -341,6 +387,7 @@ class NativeSpeechRecognizer {
 
     restart() {
         this.lastPartialText = '';
+        this.lastInterimText = '';
         this.restartListening();
     }
 }
