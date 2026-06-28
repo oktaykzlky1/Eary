@@ -3,6 +3,7 @@ import { SpeechRecognition } from '@capgo/capacitor-speech-recognition';
 
 const VoiceSettings = registerPlugin('VoiceSettings');
 let nativePermissionRequestPromise = null;
+let nativeSpeechSessionCounter = 0;
 
 const isIOSNative = () => Capacitor.getPlatform() === 'ios';
 
@@ -114,6 +115,7 @@ class NativeSpeechRecognizer {
         this.restartTimer = null;
         this.startedAt = 0;
         this.useOnDeviceRecognition = false;
+        this.sessionId = 0;
     }
 
     async start() {
@@ -145,11 +147,21 @@ class NativeSpeechRecognizer {
             this.lastPartialText = '';
             this.isStartingOrRestarting = true;
             this.startedAt = Date.now();
+            this.sessionId = ++nativeSpeechSessionCounter;
+            const activeSessionId = this.sessionId;
 
             await this.removeListeners();
+            if (typeof SpeechRecognition.removeAllListeners === 'function') {
+                try {
+                    await SpeechRecognition.removeAllListeners();
+                } catch (error) {
+                    console.warn("Failed to clear stale speech listeners:", error);
+                }
+            }
 
             // 2. Register listener for native partial transcription updates
             this.listener = await SpeechRecognition.addListener("partialResults", (data) => {
+                if (!this.isListening || this.sessionId !== activeSessionId) return;
                 if (data && data.matches && data.matches.length > 0) {
                     const text = data.matches[0];
                     this.lastPartialText = text;
@@ -160,6 +172,7 @@ class NativeSpeechRecognizer {
 
             // 3. Register state listener to detect if the OS stops listening (e.g. silence or error)
             this.stateListener = await SpeechRecognition.addListener("listeningState", (data) => {
+                if (this.sessionId !== activeSessionId) return;
                 if (data && data.state === "started") {
                     this.isStartingOrRestarting = false;
                 }
@@ -176,6 +189,7 @@ class NativeSpeechRecognizer {
 
             // Register error listener
             this.errorListener = await SpeechRecognition.addListener("error", (data) => {
+                if (this.sessionId !== activeSessionId) return;
                 console.error("Native SpeechRecognition Error Event:", data);
                 if (this.isListening) {
                     const errorMsg = data.message || data.error || "";
@@ -250,6 +264,7 @@ class NativeSpeechRecognizer {
 
     async restartListening() {
         if (!this.isListening) return;
+        const activeSessionId = this.sessionId;
         if (isIOSNative()) return;
         if (this.isStartingOrRestarting) {
             console.log("Speech recognition is already starting/restarting, skipping redundant restart call.");
@@ -265,7 +280,7 @@ class NativeSpeechRecognizer {
             }
 
             // Finalize the last partial text if any
-            if (this.lastPartialText.trim()) {
+            if (this.sessionId === activeSessionId && this.lastPartialText.trim()) {
                 this.onResult(this.lastPartialText.trim(), "");
                 this.lastPartialText = '';
             }
@@ -293,13 +308,15 @@ class NativeSpeechRecognizer {
         if (!this.isListening) return;
         this.isListening = false;
         this.isStartingOrRestarting = false;
+        const activePartialText = String(this.lastPartialText || '').trim();
+        this.sessionId = ++nativeSpeechSessionCounter;
         clearTimeout(this.restartTimer);
         this.restartTimer = null;
         
         try {
             if (isIOSNative()) {
-                const result = await SpeechRecognition.stop();
-                const finalText = String(result?.matches?.[0] || this.lastPartialText || '').trim();
+                await SpeechRecognition.stop();
+                const finalText = activePartialText;
                 if (finalText) this.onResult(finalText, "");
             } else {
                 await SpeechRecognition.setPTTState({ held: false });
@@ -310,8 +327,8 @@ class NativeSpeechRecognizer {
             }
         } catch (e) {
             console.error("Error stopping Speech Recognition:", e);
-            if (this.lastPartialText.trim()) {
-                this.onResult(this.lastPartialText.trim(), "");
+            if (activePartialText) {
+                this.onResult(activePartialText, "");
             }
         }
 
@@ -357,7 +374,18 @@ class NativeSpeechRecognizer {
     }
 
     abort() {
-        this.stop();
+        this.sessionId = ++nativeSpeechSessionCounter;
+        this.isListening = false;
+        this.isStartingOrRestarting = false;
+        this.lastPartialText = '';
+        clearTimeout(this.restartTimer);
+        this.restartTimer = null;
+        this.removeListeners();
+        try {
+            SpeechRecognition.stop();
+        } catch {
+            // best-effort cleanup only
+        }
     }
 
     restart() {
