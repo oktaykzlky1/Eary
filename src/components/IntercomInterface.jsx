@@ -1389,6 +1389,7 @@ export default function IntercomInterface({ roomData, onLeave, language = 'tr-TR
     const suppressNextSpeechEndRef = useRef(false);
     const ignoreSpeechResultsRef = useRef(false);
     const speechStartInFlightRef = useRef(false);
+    const recentVoiceMessagesRef = useRef([]);
 
     const setSpeechPreview = (value) => {
         interimTextRef.current = value;
@@ -1477,6 +1478,28 @@ export default function IntercomInterface({ roomData, onLeave, language = 'tr-TR
         return bestMatch;
     };
 
+    const getSpeechSenderName = (owner) => {
+        const faceState = faceStateRef.current;
+        return faceState.splitScreenEnabled && faceState.faceSessionActive && owner === 'guest'
+            ? 'Karşı taraf'
+            : nickname;
+    };
+
+    const rememberRecentVoiceMessage = (text, owner) => {
+        const clean = String(text || '').trim();
+        if (!clean) return;
+        const now = Date.now();
+        recentVoiceMessagesRef.current = [
+            ...recentVoiceMessagesRef.current.filter(message => now - Number(message.timestamp || 0) < 10 * 60 * 1000),
+            {
+                text: clean,
+                senderName: getSpeechSenderName(owner),
+                timestamp: now,
+                isVoice: true
+            }
+        ].slice(-12);
+    };
+
     const stripPreviousSpeakerPrefix = (value, owner) => {
         const faceState = faceStateRef.current;
         const words = String(value || '').trim().split(/\s+/).filter(Boolean);
@@ -1484,18 +1507,20 @@ export default function IntercomInterface({ roomData, onLeave, language = 'tr-TR
 
         const normalizedWords = normalizeSpeechWords(value);
         const isFaceSession = faceState.splitScreenEnabled && faceState.faceSessionActive;
-        const senderName = owner === 'guest' ? 'Karşı taraf' : nickname;
+        const senderName = getSpeechSenderName(owner);
         const now = Date.now();
-        const recentCachedMessages = (isFaceSession
-            ? messagesRef.current
-                .filter(message => Number(message.timestamp || 0) >= faceState.faceSessionStartedAt - 5000)
-                .filter(message => message.text)
-                .slice(-10)
-            : messagesRef.current
-                .filter(message => message.senderName === senderName && message.text && message.isVoice)
-                .filter(message => now - Number(message.timestamp || 0) < 10 * 60 * 1000)
-                .slice(-4)
-        ).reverse();
+        const recentCachedMessages = [
+            ...recentVoiceMessagesRef.current,
+            ...messagesRef.current
+        ]
+            .filter(message => now - Number(message.timestamp || 0) < 10 * 60 * 1000)
+            .filter(message => message.text)
+            .filter(message => isFaceSession
+                ? Number(message.timestamp || 0) >= faceState.faceSessionStartedAt - 5000
+                : message.senderName === senderName && message.isVoice)
+            .sort((first, second) => Number(second.timestamp || 0) - Number(first.timestamp || 0))
+            .filter((message, index, list) => list.findIndex(item => item.text === message.text && item.senderName === message.senderName) === index)
+            .slice(0, isFaceSession ? 10 : 8);
 
         if (!recentCachedMessages.length) return value.trim();
 
@@ -1570,6 +1595,7 @@ export default function IntercomInterface({ roomData, onLeave, language = 'tr-TR
         lastCapturedTextRef.current = '';
         finalizedSpeechRef.current = '';
         clearSpeechPreview();
+        rememberRecentVoiceMessage(pendingText, speechOwner);
         await sendMessageToCloud(pendingText, true, lang, { speechOwner });
     };
 
@@ -1760,7 +1786,7 @@ export default function IntercomInterface({ roomData, onLeave, language = 'tr-TR
             setIsSpeechStarting(true);
             setActiveRecognitionLang(actualLang);
             speechSessionRef.current += 1;
-            speechOwnerRef.current = faceSpeakerRef.current;
+            speechOwnerRef.current = splitScreenEnabled && faceSessionActive ? faceSpeakerRef.current : 'host';
             resetSpeechCapture();
             speechStopSentRef.current = false;
             ignoreSpeechResultsRef.current = false;
