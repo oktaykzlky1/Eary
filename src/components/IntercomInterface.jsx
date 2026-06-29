@@ -131,6 +131,7 @@ export default function IntercomInterface({ roomData, onLeave, language = 'tr-TR
     const faceStateRef = useRef({ splitScreenEnabled: false, faceSessionActive: false, faceSessionStartedAt: 0 });
     const [roomMembers, setRoomMembers] = useState([]);
     const [isListening, setIsListening] = useState(false);
+    const [isSpeechStarting, setIsSpeechStarting] = useState(false);
     const isListeningRef = useRef(false);
     const [interimText, setInterimText] = useState('');
     const [manualText, setManualText] = useState('');
@@ -299,7 +300,7 @@ export default function IntercomInterface({ roomData, onLeave, language = 'tr-TR
     const [translations, setTranslations] = useState({});
     const [showOriginalTranslations, setShowOriginalTranslations] = useState({});
     const [topTranslations, setTopTranslations] = useState({});
-    const [activeRecognitionLang, setActiveRecognitionLang] = useState(() => localStorage.getItem('eary_speech_lang') || 'tr-TR');
+    const [, setActiveRecognitionLang] = useState(() => localStorage.getItem('eary_speech_lang') || 'tr-TR');
 
     useEffect(() => {
         messagesRef.current = messages;
@@ -1386,6 +1387,8 @@ export default function IntercomInterface({ roomData, onLeave, language = 'tr-TR
     const speechSessionRef = useRef(0);
     const speechOwnerRef = useRef('host');
     const suppressNextSpeechEndRef = useRef(false);
+    const ignoreSpeechResultsRef = useRef(false);
+    const speechStartInFlightRef = useRef(false);
 
     const setSpeechPreview = (value) => {
         interimTextRef.current = value;
@@ -1476,16 +1479,25 @@ export default function IntercomInterface({ roomData, onLeave, language = 'tr-TR
 
     const stripPreviousSpeakerPrefix = (value, owner) => {
         const faceState = faceStateRef.current;
-        if (!faceState.splitScreenEnabled || !faceState.faceSessionActive) return value.trim();
         const words = String(value || '').trim().split(/\s+/).filter(Boolean);
         if (!words.length) return '';
 
         const normalizedWords = normalizeSpeechWords(value);
-        const recentCachedMessages = messagesRef.current
-            .filter(message => Number(message.timestamp || 0) >= faceState.faceSessionStartedAt - 5000)
-            .filter(message => message.text)
-            .slice(-10)
-            .reverse();
+        const isFaceSession = faceState.splitScreenEnabled && faceState.faceSessionActive;
+        const senderName = owner === 'guest' ? 'Karşı taraf' : nickname;
+        const now = Date.now();
+        const recentCachedMessages = (isFaceSession
+            ? messagesRef.current
+                .filter(message => Number(message.timestamp || 0) >= faceState.faceSessionStartedAt - 5000)
+                .filter(message => message.text)
+                .slice(-10)
+            : messagesRef.current
+                .filter(message => message.senderName === senderName && message.text && message.isVoice)
+                .filter(message => now - Number(message.timestamp || 0) < 10 * 60 * 1000)
+                .slice(-4)
+        ).reverse();
+
+        if (!recentCachedMessages.length) return value.trim();
 
         for (const message of recentCachedMessages) {
             const previousWords = normalizeSpeechWords(message.text);
@@ -1593,10 +1605,13 @@ export default function IntercomInterface({ roomData, onLeave, language = 'tr-TR
         }
 
         const handleResult = (finalText, interimText) => {
+            if (ignoreSpeechResultsRef.current || speechStopSentRef.current) return;
+            const isNativeSpeech = Capacitor.isNativePlatform();
+            const isFaceSpeech = faceStateRef.current.splitScreenEnabled && faceStateRef.current.faceSessionActive;
+            const shouldReplaceSpeechBuffer = isNativeSpeech || isFaceSpeech;
             if (finalText.trim()) {
                 const chunk = finalText.trim();
                 const previous = finalizedSpeechRef.current.trim();
-                const shouldReplaceSpeechBuffer = faceStateRef.current.splitScreenEnabled && faceStateRef.current.faceSessionActive;
                 if (shouldReplaceSpeechBuffer) {
                     finalizedSpeechRef.current = chunk;
                 } else if (previous && chunk.startsWith(previous)) {
@@ -1608,7 +1623,7 @@ export default function IntercomInterface({ roomData, onLeave, language = 'tr-TR
                 lastCapturedTextRef.current = cleanedFinal;
                 setSpeechPreview(cleanedFinal);
             } else if (interimText.trim()) {
-                const preview = faceStateRef.current.splitScreenEnabled && faceStateRef.current.faceSessionActive
+                const preview = shouldReplaceSpeechBuffer
                     ? interimText.trim()
                     : `${finalizedSpeechRef.current} ${interimText.trim()}`.trim();
                 const cleanedPreview = stripPreviousSpeakerPrefix(preview, speechOwnerRef.current);
@@ -1618,6 +1633,8 @@ export default function IntercomInterface({ roomData, onLeave, language = 'tr-TR
         };
 
         const handleEnd = () => {
+            setIsSpeechStarting(false);
+            speechStartInFlightRef.current = false;
             if (suppressNextSpeechEndRef.current) {
                 suppressNextSpeechEndRef.current = false;
                 setIsListening(false);
@@ -1642,6 +1659,8 @@ export default function IntercomInterface({ roomData, onLeave, language = 'tr-TR
 
         const handleError = (e) => {
             console.error("Speech Recognition Error:", e);
+            setIsSpeechStarting(false);
+            speechStartInFlightRef.current = false;
             setIsListening(false);
             clearSpeechPreview();
             lastCapturedTextRef.current = '';
@@ -1702,6 +1721,7 @@ export default function IntercomInterface({ roomData, onLeave, language = 'tr-TR
     }, [speechLang]);
 
     const toggleListening = async (targetLang = speechLang) => {
+        if (speechStartInFlightRef.current) return;
         const actualLang = (typeof targetLang === 'string') ? targetLang : speechLang;
         const rec = getOrInitRecognizer(actualLang);
         if (!rec) {
@@ -1711,12 +1731,15 @@ export default function IntercomInterface({ roomData, onLeave, language = 'tr-TR
 
         if (isListeningRef.current) {
             const pendingBeforeStop = getPendingSpeechText();
+            ignoreSpeechResultsRef.current = true;
+            speechStartInFlightRef.current = false;
+            setIsSpeechStarting(false);
+            isListeningRef.current = false;
+            setIsListening(false);
+            stopActiveStream();
+            playBeep('stop');
             if (pendingBeforeStop) {
                 lastCapturedTextRef.current = pendingBeforeStop;
-                isListeningRef.current = false;
-                setIsListening(false);
-                stopActiveStream();
-                playBeep('stop');
                 await sendCapturedSpeechText(pendingBeforeStop, actualLang);
             }
             try {
@@ -1729,18 +1752,18 @@ export default function IntercomInterface({ roomData, onLeave, language = 'tr-TR
             }
             const fallbackText = getPendingSpeechText() || pendingBeforeStop;
             if (fallbackText && !speechStopSentRef.current) {
-                setIsListening(false);
-                stopActiveStream();
-                playBeep('stop');
                 await sendCapturedSpeechText(fallbackText, actualLang);
             }
             stopActiveStream();
         } else {
+            speechStartInFlightRef.current = true;
+            setIsSpeechStarting(true);
             setActiveRecognitionLang(actualLang);
             speechSessionRef.current += 1;
             speechOwnerRef.current = faceSpeakerRef.current;
             resetSpeechCapture();
             speechStopSentRef.current = false;
+            ignoreSpeechResultsRef.current = false;
             if (splitScreenEnabled && faceSessionActive) {
                 try {
                     await recognitionRef.current?.abort?.();
@@ -1749,13 +1772,19 @@ export default function IntercomInterface({ roomData, onLeave, language = 'tr-TR
                 }
                 recognitionRef.current = null;
             }
-            isListeningRef.current = true;
-            setIsListening(true);
-            playBeep('start');
+            setSpeechPreview('Mikrofon hazırlanıyor...');
             try {
                 const freshRec = splitScreenEnabled && faceSessionActive ? getOrInitRecognizer(actualLang) : rec;
                 await freshRec.start();
+                speechStartInFlightRef.current = false;
+                setIsSpeechStarting(false);
+                isListeningRef.current = true;
+                setIsListening(true);
+                if (interimTextRef.current === 'Mikrofon hazırlanıyor...') clearSpeechPreview();
+                playBeep('start');
             } catch (error) {
+                speechStartInFlightRef.current = false;
+                setIsSpeechStarting(false);
                 isListeningRef.current = false;
                 setIsListening(false);
                 clearSpeechPreview();
@@ -1894,7 +1923,8 @@ export default function IntercomInterface({ roomData, onLeave, language = 'tr-TR
                     return [...current, payload].sort((a, b) => Number(a.timestamp || 0) - Number(b.timestamp || 0));
                 });
 
-                const { id, ...cloudPayload } = payload;
+                const cloudPayload = { ...payload };
+                delete cloudPayload.id;
                 await updateRest({
                     [`rooms/${roomId}/messages/${payload.id}`]: {
                         ...cloudPayload,
@@ -1935,7 +1965,8 @@ export default function IntercomInterface({ roomData, onLeave, language = 'tr-TR
                 return [...current, payload].sort((a, b) => Number(a.timestamp || 0) - Number(b.timestamp || 0));
             });
 
-            const { id, ...cloudPayload } = payload;
+            const cloudPayload = { ...payload };
+            delete cloudPayload.id;
             await updateRest({
                 [`rooms/${roomId}/messages/${payload.id}`]: {
                     ...cloudPayload,
@@ -3205,12 +3236,12 @@ export default function IntercomInterface({ roomData, onLeave, language = 'tr-TR
                         <button
                             type="button"
                             onClick={toggleListening}
-                            className={`relative flex h-11 w-11 shrink-0 items-center justify-center rounded-full transition-all duration-300 active:scale-90 ${
-                                isListening 
-                                    ? 'bg-rose-600 hover:bg-rose-500 text-white shadow-lg shadow-rose-600/30' 
-                                    : 'eary-brand-bg'
-                            }`}
-                        >
+	                            className={`relative flex h-11 w-11 shrink-0 items-center justify-center rounded-full transition-all duration-300 active:scale-90 ${
+	                                isListening 
+	                                    ? 'bg-rose-600 hover:bg-rose-500 text-white shadow-lg shadow-rose-600/30' 
+	                                    : 'eary-brand-bg'
+	                            }`}
+	                        >
                             {isListening ? (
                                 <>
                                     {/* Web Audio API Waveform Visualizer */}
@@ -3226,13 +3257,15 @@ export default function IntercomInterface({ roomData, onLeave, language = 'tr-TR
                                 <Mic size={24} />
                             )}
                         </button>
-                        <span className={`text-[11px] font-semibold flex items-center gap-1.5 ${
-                            isListening ? 'text-rose-500 animate-pulse' : 'eary-muted'
-                        }`}>
-                            {isListening ? (
-                                <>
-                                    <span className="w-1.5 h-1.5 rounded-full bg-rose-600 animate-ping shrink-0" />
-                                    Dinliyor / Kayıt Ediyor... (Bitirmek İçin Basın)
+	                        <span className={`text-[11px] font-semibold flex items-center gap-1.5 ${
+	                            isListening ? 'text-rose-500 animate-pulse' : 'eary-muted'
+	                        }`}>
+	                            {isSpeechStarting ? (
+	                                'Mikrofon hazırlanıyor...'
+	                            ) : isListening ? (
+	                                <>
+	                                    <span className="w-1.5 h-1.5 rounded-full bg-rose-600 animate-ping shrink-0" />
+	                                    Dinliyor / Kayıt Ediyor... (Bitirmek İçin Basın)
                                 </>
                             ) : (
                                 isTestBotRoom ? 'Test sesli mesaj gönder' : 'Başlatmak için dokun'

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import {
-    ArrowLeft, AtSign, BellOff, BookUser, Bot, LockKeyhole, Mail, Menu, MessageCircle, MessageSquarePlus,
+    ArrowLeft, AtSign, BellOff, LockKeyhole, Mail, Menu, MessageCircle, MessageSquarePlus,
     Phone, Search, Send, Settings, ShieldCheck, Sparkles, Star, Trash2, UserPlus, UserRound, X
 } from 'lucide-react';
 import { Capacitor, registerPlugin } from '@capacitor/core';
@@ -86,7 +86,7 @@ export default function ChatHome(props) {
         verificationCode, setVerificationCode, handleVerifyPhone, handleLogin, handleRegister, authBusy, error,
         showNewRoomForm, setShowNewRoomForm, onOpenTestBot, filteredHistory,
         lastMessages, presenceData, handleSelectHistory, handleAcceptedRequest, handleRemoveHistoryItem,
-        searchQuery, setSearchQuery, activeFilter, setActiveFilter, onOpenSettings
+        searchQuery, setSearchQuery, onOpenSettings
     } = props;
 
     const [selectedChatIds, setSelectedChatIds] = useState([]);

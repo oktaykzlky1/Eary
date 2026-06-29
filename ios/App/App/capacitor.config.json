@@ -1,0 +1,10 @@
+{
+	"appId": "com.asleyduo.app",
+	"appName": "Eary",
+	"webDir": "dist",
+	"packageClassList": [
+		"AppPlugin",
+		"LocalNotificationsPlugin",
+		"PushNotificationsPlugin"
+	]
+}

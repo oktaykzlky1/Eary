@@ -132,14 +132,14 @@ public class EarySpeechPlugin extends Plugin {
                 payload.put("message", errorMessage(error));
                 payload.put("sessionId", currentSessionId);
                 notifyListeners("error", payload);
-                stopListening("error", false);
+                finishRecognizerCallback("error", currentSessionId);
             }
 
             @Override
             public void onResults(Bundle results) {
                 if (currentSessionId != sessionId) return;
                 emitBundleText(results, true, currentSessionId);
-                stopListening("results", false);
+                finishRecognizerCallback("results", currentSessionId);
             }
 
             @Override
@@ -173,30 +173,49 @@ public class EarySpeechPlugin extends Plugin {
 
     private void stopListening(String reason, boolean emitFinal) {
         long currentSessionId = sessionId;
+        boolean wasListening = listening;
         if (emitFinal && !lastText.trim().isEmpty()) {
             emitText(lastText.trim(), true, currentSessionId);
         }
 
-        if (recognizer != null) {
-            try {
-                recognizer.stopListening();
-            } catch (Exception ignored) {}
-            try {
-                recognizer.cancel();
-            } catch (Exception ignored) {}
-            try {
-                recognizer.destroy();
-            } catch (Exception ignored) {}
-            recognizer = null;
-        }
-
-        if (listening || currentSessionId != 0) {
-            emitState("stopped", currentSessionId, reason);
-        }
-
+        SpeechRecognizer currentRecognizer = recognizer;
+        recognizer = null;
         listening = false;
         sessionId = 0;
         lastText = "";
+
+        if (wasListening || currentSessionId != 0) {
+            emitState("stopped", currentSessionId, reason);
+        }
+
+        if (currentRecognizer != null) {
+            try {
+                currentRecognizer.stopListening();
+            } catch (Exception ignored) {}
+            destroyRecognizerLater(currentRecognizer);
+        }
+    }
+
+    private void finishRecognizerCallback(String reason, long currentSessionId) {
+        SpeechRecognizer currentRecognizer = recognizer;
+        recognizer = null;
+        listening = false;
+        sessionId = 0;
+        lastText = "";
+        emitState("stopped", currentSessionId, reason);
+        destroyRecognizerLater(currentRecognizer);
+    }
+
+    private void destroyRecognizerLater(SpeechRecognizer currentRecognizer) {
+        if (currentRecognizer == null) return;
+        mainHandler.postDelayed(() -> {
+            try {
+                currentRecognizer.cancel();
+            } catch (Exception ignored) {}
+            try {
+                currentRecognizer.destroy();
+            } catch (Exception ignored) {}
+        }, 250);
     }
 
     private void emitBundleText(Bundle bundle, boolean isFinal, long currentSessionId) {

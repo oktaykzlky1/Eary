@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Capacitor, registerPlugin } from '@capacitor/core';
 import {
-    X, ArrowLeft, UserRound, Settings, CircleHelp, Bell, Languages, Database, Shield, Smartphone, KeyRound, Lock,
+    X, ArrowLeft, UserRound, CircleHelp, Bell, Languages, Database, Shield, Smartphone, KeyRound, Lock,
     Type, Moon, Sun, LogOut, LogIn, ChevronRight, Mic2, ShieldCheck, Trash2, Download, Archive,
     MessageCircle, Check, Camera, Eye, EyeOff, LockKeyhole, AtSign,
     Phone, UsersRound, Image, Clock3, CheckCheck, MessageCircleQuestion, Copy, Accessibility, HardDrive
@@ -58,8 +58,8 @@ function PrivacyChoice({ icon: Icon, title, description, value, options, onChang
 
 export default function Sidebar({
     isOpen, onClose, account, onLogout, onAuthClick, alwaysNotify, onToggleAlwaysNotify,
-    onUpdateAccount, roomData, speechLang, setSpeechLang, translationTargetLang, setTranslationTargetLang, autoTranslate, onToggleAutoTranslate,
-    splitScreenEnabled, onToggleSplitScreen, chatFontSize = 16, setChatFontSize,
+    onUpdateAccount, speechLang, setSpeechLang,
+    chatFontSize = 16, setChatFontSize,
     theme = 'light', onToggleTheme, onlineVisibility = 'everyone', setOnlineVisibility, initialSection
 }) {
     const [tab, setTab] = useState(initialSection || 'profile');

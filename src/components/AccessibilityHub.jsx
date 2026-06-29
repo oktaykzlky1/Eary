@@ -1,9 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
 import {
-    AlertTriangle, ArrowLeft, BellRing, BriefcaseBusiness, Captions,
-    Check, ChevronRight, CircleHelp, ContactRound, DoorOpen, Flame, GraduationCap,
+    AlertTriangle, ArrowLeft, BellRing, Captions,
+    Check, ChevronRight, CircleHelp, ContactRound, DoorOpen, Flame,
     HeartPulse, History, Languages, MessageCircle, Mic, PanelsTopLeft, Phone, Plus, Save, ShieldAlert,
-    Sparkles, Star, Stethoscope, StopCircle, Trash2, UserRound, UsersRound, Volume2, X
+    Sparkles, Star, StopCircle, Trash2, UserRound, Volume2, X
 } from 'lucide-react';
 import { getDuoSpeechRecognizer } from '../utils/speech';
 import { requestNotificationPermission, scheduleNotification } from '../utils/notifications';
@@ -30,50 +30,6 @@ const MODE_CONFIG = {
             { title: 'Yapılacaklar', keywords: ['yapın', 'hazırlayın', 'gönderin', 'getirin', 'kontrol edin'] }
         ],
         phrases: ['Tekrar eder misiniz?', 'Biraz yavaş konuşabilir misiniz?', 'Bunu yazılı olarak paylaşır mısınız?']
-    },
-    meeting: {
-        title: 'Toplantı', icon: UsersRound, color: '#316fa8', prompt: 'Kararları, görevleri ve sorumluları ayır',
-        speakers: ['Konuşmacı 1', 'Konuşmacı 2', 'Konuşmacı 3'],
-        groups: [
-            { title: 'Kararlar', keywords: ['karar', 'kararlaştır', 'onaylandı', 'kabul edildi', 'sonuç'] },
-            { title: 'Görevler', keywords: ['görev', 'yapacak', 'hazırlayacak', 'gönderecek', 'sorumlu'] },
-            { title: 'Tarihler', keywords: ['yarın', 'haftaya', 'tarih', 'son gün', 'saat', 'teslim'] },
-            { title: 'Açık konular', keywords: ['bekliyor', 'netleşmedi', 'sonra', 'tekrar görüş', 'araştır'] }
-        ],
-        phrases: ['Biraz yavaş konuşabilir misiniz?', 'Sırayla konuşabilir misiniz?', 'Kararı ve sorumlu kişiyi tekrar eder misiniz?']
-    },
-    doctor: {
-        title: 'Doktor', icon: Stethoscope, color: '#a94f68', prompt: 'Tedavi talimatlarını ve kontrol bilgilerini ayır',
-        speakers: ['Doktor', 'Hasta', 'Refakatçi'],
-        groups: [
-            { title: 'İlaçlar', keywords: ['ilaç', 'tablet', 'şurup', 'krem', 'reçete'] },
-            { title: 'Doz ve kullanım', keywords: ['mg', 'ml', 'doz', 'günde', 'sabah', 'akşam', 'aç', 'tok'] },
-            { title: 'Kontrol ve tetkikler', keywords: ['kontrol', 'randevu', 'tahlil', 'tetkik', 'film', 'kan'] },
-            { title: 'Dikkat edilmesi gerekenler', keywords: ['acil', 'alerji', 'yan etki', 'kullanmayın', 'yasak', 'risk'] }
-        ],
-        phrases: ['İlacın adını yazar mısınız?', 'Dozu ve kullanım süresini tekrar eder misiniz?', 'Kontrol tarihi nedir?']
-    },
-    school: {
-        title: 'Okul', icon: GraduationCap, color: '#7651a8', prompt: 'Ders içeriğini, ödevleri ve sınavları düzenle',
-        speakers: ['Öğretmen', 'Öğrenci', 'Diğer'],
-        groups: [
-            { title: 'Kavramlar ve tanımlar', keywords: ['tanım', 'kavram', 'demektir', 'örnek', 'formül', 'kural'] },
-            { title: 'Ödevler', keywords: ['ödev', 'teslim', 'sayfa', 'çözün', 'okuyun', 'hazırlayın'] },
-            { title: 'Sınav bilgileri', keywords: ['sınav', 'quiz', 'puan', 'soru', 'konular', 'değerlendirme'] },
-            { title: 'Önemli tarihler', keywords: ['tarih', 'yarın', 'haftaya', 'pazartesi', 'salı', 'çarşamba', 'perşembe', 'cuma'] }
-        ],
-        phrases: ['Tekrar eder misiniz?', 'Biraz yavaş konuşabilir misiniz?', 'Ödevi ve teslim tarihini tahtaya yazar mısınız?']
-    },
-    official: {
-        title: 'Resmî Görüşme', icon: BriefcaseBusiness, color: '#176b5b', prompt: 'Belge, ücret, süre ve yükümlülükleri ayır',
-        speakers: ['Görevli', 'Başvuran', 'Tercüman'],
-        groups: [
-            { title: 'Gerekli belgeler', keywords: ['belge', 'evrak', 'form', 'kimlik', 'imza', 'başvuru'] },
-            { title: 'Ücret ve ödeme', keywords: ['ücret', 'ödeme', 'euro', 'tl', 'tutar', 'harç'] },
-            { title: 'Süre ve son tarihler', keywords: ['süre', 'son gün', 'tarih', 'iş günü', 'randevu', 'teslim'] },
-            { title: 'Hak ve yükümlülükler', keywords: ['zorunlu', 'yükümlü', 'hak', 'itiraz', 'kabul', 'ret', 'taahhüt'] }
-        ],
-        phrases: ['Bunu yazılı olarak verebilir misiniz?', 'Son tarihi tekrar eder misiniz?', 'Gerekli belgelerin listesini verebilir misiniz?']
     }
 };
 
