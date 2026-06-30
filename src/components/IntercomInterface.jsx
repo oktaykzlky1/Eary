@@ -1,6 +1,6 @@
 import { useState, useEffect, useLayoutEffect, useRef } from 'react';
 import { db, auth, storage, ref, set, push, get, getRest, updateRest, remove, onValue, onDisconnect, update, query, limitToLast, storageRef, uploadBytesResumable, getDownloadURL } from '../firebase';
-import { getDuoSpeechRecognizer } from '../utils/speech';
+import { getDuoSpeechRecognizer, rememberNativeSpeechTranscript } from '../utils/speech';
 import { correctTranscription } from '../utils/autocorrect';
 import { requestNotificationPermission, scheduleNotification } from '../utils/notifications';
 import { getDeviceId, registerRoomPushNotifications } from '../utils/pushNotifications';
@@ -1389,6 +1389,7 @@ export default function IntercomInterface({ roomData, onLeave, language = 'tr-TR
     const suppressNextSpeechEndRef = useRef(false);
     const ignoreSpeechResultsRef = useRef(false);
     const speechStartInFlightRef = useRef(false);
+    const speechClosingRef = useRef(false);
     const recentVoiceMessagesRef = useRef([]);
     const lastSentSpeechSnapshotRef = useRef({ text: '', owner: '', timestamp: 0 });
     const speechSessionBaselinesRef = useRef([]);
@@ -1418,7 +1419,8 @@ export default function IntercomInterface({ roomData, onLeave, language = 'tr-TR
 
     const closeSpeechCaptureAfterSend = async () => {
         ignoreSpeechResultsRef.current = true;
-        speechStartInFlightRef.current = false;
+        speechClosingRef.current = true;
+        speechStartInFlightRef.current = true;
         isListeningRef.current = false;
         setIsSpeechStarting(false);
         setIsListening(false);
@@ -1426,26 +1428,22 @@ export default function IntercomInterface({ roomData, onLeave, language = 'tr-TR
         clearSpeechPreview();
 
         const recognizer = recognitionRef.current;
-        if (!recognizer) return;
         if (recognitionRef.current === recognizer) {
             recognitionRef.current = null;
         }
 
         try {
-            await Promise.race([
-                Promise.resolve().then(async () => {
-                    if (typeof recognizer.abort === 'function') {
-                        await recognizer.abort();
-                        return;
-                    }
-                    if (typeof recognizer.stop === 'function') {
-                        await recognizer.stop();
-                    }
-                }),
-                new Promise(resolve => setTimeout(resolve, 900))
-            ]);
+            if (recognizer && typeof recognizer.abort === 'function') {
+                await recognizer.abort();
+            } else if (recognizer && typeof recognizer.stop === 'function') {
+                await recognizer.stop();
+            }
         } catch (error) {
             console.warn('Speech recognition could not be closed after send:', error);
+        } finally {
+            resetSpeechCapture();
+            speechClosingRef.current = false;
+            speechStartInFlightRef.current = false;
         }
     };
 
@@ -1717,10 +1715,11 @@ export default function IntercomInterface({ roomData, onLeave, language = 'tr-TR
             owner: speechOwner,
             timestamp: Date.now()
         };
+        rememberNativeSpeechTranscript(rawText || pendingText);
+        rememberRecentVoiceMessage(pendingText, speechOwner);
         lastCapturedTextRef.current = '';
         finalizedSpeechRef.current = '';
         await closeSpeechCaptureAfterSend();
-        rememberRecentVoiceMessage(pendingText, speechOwner);
         await sendMessageToCloud(pendingText, true, lang, { speechOwner });
     };
 
@@ -1878,7 +1877,7 @@ export default function IntercomInterface({ roomData, onLeave, language = 'tr-TR
     }, [speechLang]);
 
     const toggleListening = async (targetLang = speechLang) => {
-        if (speechStartInFlightRef.current) return;
+        if (speechStartInFlightRef.current || speechClosingRef.current) return;
         const actualLang = (typeof targetLang === 'string') ? targetLang : speechLang;
         const rec = getOrInitRecognizer(actualLang);
         if (!rec) {
@@ -1889,27 +1888,26 @@ export default function IntercomInterface({ roomData, onLeave, language = 'tr-TR
         if (isListeningRef.current) {
             const pendingBeforeStop = getPendingSpeechText();
             ignoreSpeechResultsRef.current = true;
-            speechStartInFlightRef.current = false;
+            speechStartInFlightRef.current = true;
             setIsSpeechStarting(false);
             isListeningRef.current = false;
             setIsListening(false);
             stopActiveStream();
             playBeep('stop');
-            if (pendingBeforeStop) {
-                lastCapturedTextRef.current = pendingBeforeStop;
-                await sendCapturedSpeechText(pendingBeforeStop, actualLang);
-            }
             try {
-                await Promise.race([
-                    rec.stop(),
-                    new Promise(resolve => setTimeout(resolve, 1200))
-                ]);
+                if (pendingBeforeStop) {
+                    lastCapturedTextRef.current = pendingBeforeStop;
+                    await sendCapturedSpeechText(pendingBeforeStop, actualLang);
+                    return;
+                }
+                await rec.stop();
+                resetSpeechCapture();
             } catch (error) {
                 console.error("Speech recognition could not be stopped:", error);
-            }
-            const fallbackText = getPendingSpeechText() || pendingBeforeStop;
-            if (fallbackText && !speechStopSentRef.current) {
-                await sendCapturedSpeechText(fallbackText, actualLang);
+            } finally {
+                if (!speechClosingRef.current) {
+                    speechStartInFlightRef.current = false;
+                }
             }
             stopActiveStream();
         } else {
@@ -3074,23 +3072,23 @@ export default function IntercomInterface({ roomData, onLeave, language = 'tr-TR
                 onPointerUp={stopChatPointerDrag}
                 onPointerCancel={stopChatPointerDrag}
                 onPointerLeave={stopChatPointerDrag}
-                className="eary-soft flex min-h-0 flex-1 touch-pan-y flex-col space-y-3 overflow-y-auto overscroll-contain scroll-smooth px-3 pb-3 pt-4"
+                className="eary-soft min-h-0 flex-1 touch-pan-y overflow-y-auto overscroll-contain scroll-smooth px-3 py-3"
                 style={{ WebkitOverflowScrolling: 'touch', touchAction: 'pan-y' }}
             >
-                {messages.length >= messageLimit && (
-                    <div className="flex justify-center pb-1">
-                        <button type="button" onClick={() => setMessageLimit(limit => limit + 60)} className="eary-shell eary-muted rounded-full border eary-line px-4 py-1.5 text-[10px] font-semibold shadow-sm">Daha eski mesajları yükle</button>
-                    </div>
-                )}
-                {messages.length === 0 ? (
-                    <div className="flex h-full items-center justify-center p-6 text-center">
-                        <p className="text-sm font-light leading-relaxed text-slate-500">
-                            {text.noMessages}
-                        </p>
-                    </div>
-                ) : (
-                    <>
-                        <div className="mt-auto" />
+                <div className="flex min-h-full flex-col justify-end gap-3">
+                    {messages.length >= messageLimit && (
+                        <div className="flex justify-center pb-1">
+                            <button type="button" onClick={() => setMessageLimit(limit => limit + 60)} className="eary-shell eary-muted rounded-full border eary-line px-4 py-1.5 text-[10px] font-semibold shadow-sm">Daha eski mesajları yükle</button>
+                        </div>
+                    )}
+                    {messages.length === 0 ? (
+                        <div className="flex min-h-full items-center justify-center p-6 text-center">
+                            <p className="text-sm font-light leading-relaxed text-slate-500">
+                                {text.noMessages}
+                            </p>
+                        </div>
+                    ) : (
+                        <>
                         {messages.filter(msg => !hiddenMessageIds.includes(msg.id)).map((msg) => {
                         const isSelf = msg.senderName === nickname;
                         const isSelected = selectedIds.includes(msg.id);
@@ -3225,7 +3223,8 @@ export default function IntercomInterface({ roomData, onLeave, language = 'tr-TR
                         })}
                     </>
                 )}
-                <div ref={messagesEndRef} className="h-0" />
+                    <div ref={messagesEndRef} className="h-px shrink-0" />
+                </div>
             </main>
 
             {showScrollToBottom && (
