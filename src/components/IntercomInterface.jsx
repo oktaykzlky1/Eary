@@ -1511,13 +1511,14 @@ export default function IntercomInterface({ roomData, onLeave, language = 'tr-TR
         const now = Date.now();
         const recentCachedMessages = [
             ...recentVoiceMessagesRef.current,
+            ...Object.values(pendingLocalMessagesRef.current || {}),
             ...messagesRef.current
         ]
             .filter(message => now - Number(message.timestamp || 0) < 10 * 60 * 1000)
             .filter(message => message.text)
             .filter(message => isFaceSession
                 ? Number(message.timestamp || 0) >= faceState.faceSessionStartedAt - 5000
-                : message.senderName === senderName && message.isVoice)
+                : message.senderName === senderName)
             .sort((first, second) => Number(second.timestamp || 0) - Number(first.timestamp || 0))
             .filter((message, index, list) => list.findIndex(item => item.text === message.text && item.senderName === message.senderName) === index)
             .slice(0, isFaceSession ? 10 : 8);
@@ -1790,17 +1791,18 @@ export default function IntercomInterface({ roomData, onLeave, language = 'tr-TR
             resetSpeechCapture();
             speechStopSentRef.current = false;
             ignoreSpeechResultsRef.current = false;
-            if (splitScreenEnabled && faceSessionActive) {
+            const shouldResetRecognizerBeforeStart = Capacitor.isNativePlatform() || (splitScreenEnabled && faceSessionActive);
+            if (shouldResetRecognizerBeforeStart) {
                 try {
                     await recognitionRef.current?.abort?.();
                 } catch (error) {
-                    console.warn('Speech recognition could not be reset before face-to-face capture:', error);
+                    console.warn('Speech recognition could not be reset before capture:', error);
                 }
                 recognitionRef.current = null;
             }
             setSpeechPreview('Mikrofon hazırlanıyor...');
             try {
-                const freshRec = splitScreenEnabled && faceSessionActive ? getOrInitRecognizer(actualLang) : rec;
+                const freshRec = shouldResetRecognizerBeforeStart ? getOrInitRecognizer(actualLang) : rec;
                 await freshRec.start();
                 speechStartInFlightRef.current = false;
                 setIsSpeechStarting(false);
