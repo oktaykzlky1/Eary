@@ -1391,6 +1391,7 @@ export default function IntercomInterface({ roomData, onLeave, language = 'tr-TR
     const speechStartInFlightRef = useRef(false);
     const recentVoiceMessagesRef = useRef([]);
     const lastSentSpeechSnapshotRef = useRef({ text: '', owner: '', timestamp: 0 });
+    const speechSessionBaselinesRef = useRef([]);
 
     const setSpeechPreview = (value) => {
         interimTextRef.current = value;
@@ -1512,38 +1513,48 @@ export default function IntercomInterface({ roomData, onLeave, language = 'tr-TR
         return bestMatch;
     };
 
-    const stripSentSpeechSnapshot = (value, owner) => {
+    const stripKnownSpeechPrefix = (value, baselines = []) => {
         const text = String(value || '').trim();
         if (!text) return '';
 
-        const snapshot = lastSentSpeechSnapshotRef.current || {};
-        const snapshotText = String(snapshot.text || '').trim();
-        const snapshotIsFresh = Date.now() - Number(snapshot.timestamp || 0) < 2 * 60 * 1000;
-        if (!snapshotText || snapshot.owner !== owner || !snapshotIsFresh) return text;
-
         const currentWords = text.split(/\s+/).filter(Boolean);
         const currentNormalized = normalizeSpeechWords(text);
-        const previousNormalized = normalizeSpeechWords(snapshotText);
-        if (currentNormalized.length < 2 || previousNormalized.length < 2) return text;
+        if (currentNormalized.length < 2) return text;
 
-        let exactPrefixLength = 0;
-        const comparableLength = Math.min(currentNormalized.length, previousNormalized.length);
-        for (let index = 0; index < comparableLength; index += 1) {
-            if (currentNormalized[index] !== previousNormalized[index]) break;
-            exactPrefixLength += 1;
-        }
+        for (const baseline of baselines) {
+            const previousNormalized = normalizeSpeechWords(baseline?.text);
+            if (previousNormalized.length < 2) continue;
 
-        const exactCoverage = exactPrefixLength / previousNormalized.length;
-        if (exactPrefixLength >= Math.min(3, previousNormalized.length) && exactCoverage >= 0.72 && currentWords.length > exactPrefixLength) {
-            return currentWords.slice(exactPrefixLength).join(' ').trim();
-        }
+            let exactPrefixLength = 0;
+            const comparableLength = Math.min(currentNormalized.length, previousNormalized.length);
+            for (let index = 0; index < comparableLength; index += 1) {
+                if (currentNormalized[index] !== previousNormalized[index]) break;
+                exactPrefixLength += 1;
+            }
 
-        const fuzzyPrefixLength = findLikelyCachedPrefixLength(currentNormalized, previousNormalized);
-        if (fuzzyPrefixLength && currentWords.length > fuzzyPrefixLength) {
-            return currentWords.slice(fuzzyPrefixLength).join(' ').trim();
+            const exactCoverage = exactPrefixLength / previousNormalized.length;
+            if (exactPrefixLength >= Math.min(3, previousNormalized.length) && exactCoverage >= 0.72 && currentWords.length > exactPrefixLength) {
+                return currentWords.slice(exactPrefixLength).join(' ').trim();
+            }
+
+            const fuzzyPrefixLength = findLikelyCachedPrefixLength(currentNormalized, previousNormalized);
+            if (fuzzyPrefixLength && currentWords.length > fuzzyPrefixLength) {
+                return currentWords.slice(fuzzyPrefixLength).join(' ').trim();
+            }
         }
 
         return text;
+    };
+
+    const stripSentSpeechSnapshot = (value, owner) => {
+        const snapshot = lastSentSpeechSnapshotRef.current || {};
+        const snapshotText = String(snapshot.text || '').trim();
+        const snapshotIsFresh = Date.now() - Number(snapshot.timestamp || 0) < 2 * 60 * 1000;
+        const baselines = [
+            ...speechSessionBaselinesRef.current,
+            ...(snapshotText && snapshot.owner === owner && snapshotIsFresh ? [{ text: snapshotText }] : [])
+        ];
+        return stripKnownSpeechPrefix(value, baselines);
     };
 
     const getSpeechSenderName = (owner) => {
@@ -1566,6 +1577,39 @@ export default function IntercomInterface({ roomData, onLeave, language = 'tr-TR
                 isVoice: true
             }
         ].slice(-12);
+    };
+
+    const buildSpeechSessionBaselines = (owner) => {
+        const faceState = faceStateRef.current;
+        const isFaceSession = faceState.splitScreenEnabled && faceState.faceSessionActive;
+        const senderName = getSpeechSenderName(owner);
+        const now = Date.now();
+        const candidates = [
+            ...recentVoiceMessagesRef.current,
+            ...Object.values(pendingLocalMessagesRef.current || {}),
+            ...messagesRef.current
+        ]
+            .filter(message => message?.text)
+            .filter(message => now - Number(message.timestamp || 0) < 10 * 60 * 1000)
+            .filter(message => {
+                if (isFaceSession) {
+                    return Number(message.timestamp || 0) >= faceState.faceSessionStartedAt - 5000;
+                }
+                return (
+                    message.senderName === senderName ||
+                    Boolean(currentUsername && message.senderUsername === currentUsername) ||
+                    Boolean(currentDeviceId && message.senderDeviceId === currentDeviceId)
+                );
+            })
+            .sort((first, second) => Number(second.timestamp || 0) - Number(first.timestamp || 0));
+
+        const seen = new Set();
+        return candidates.filter(message => {
+            const key = normalizeSpeechWords(message.text).join(' ');
+            if (!key || seen.has(key)) return false;
+            seen.add(key);
+            return true;
+        }).slice(0, 8);
     };
 
     const stripPreviousSpeakerPrefix = (value, owner) => {
@@ -1668,14 +1712,14 @@ export default function IntercomInterface({ roomData, onLeave, language = 'tr-TR
             return;
         }
         speechStopSentRef.current = true;
-        lastCapturedTextRef.current = '';
-        finalizedSpeechRef.current = '';
-        await closeSpeechCaptureAfterSend();
         lastSentSpeechSnapshotRef.current = {
             text: rawText,
             owner: speechOwner,
             timestamp: Date.now()
         };
+        lastCapturedTextRef.current = '';
+        finalizedSpeechRef.current = '';
+        await closeSpeechCaptureAfterSend();
         rememberRecentVoiceMessage(pendingText, speechOwner);
         await sendMessageToCloud(pendingText, true, lang, { speechOwner });
     };
@@ -1874,6 +1918,7 @@ export default function IntercomInterface({ roomData, onLeave, language = 'tr-TR
             setActiveRecognitionLang(actualLang);
             speechSessionRef.current += 1;
             speechOwnerRef.current = splitScreenEnabled && faceSessionActive ? faceSpeakerRef.current : 'host';
+            speechSessionBaselinesRef.current = buildSpeechSessionBaselines(speechOwnerRef.current);
             resetSpeechCapture();
             speechStopSentRef.current = false;
             ignoreSpeechResultsRef.current = false;
@@ -3029,7 +3074,7 @@ export default function IntercomInterface({ roomData, onLeave, language = 'tr-TR
                 onPointerUp={stopChatPointerDrag}
                 onPointerCancel={stopChatPointerDrag}
                 onPointerLeave={stopChatPointerDrag}
-                className="eary-soft min-h-0 flex-1 touch-pan-y space-y-3 overflow-y-auto overscroll-contain scroll-smooth px-3 pb-8 pt-4"
+                className="eary-soft flex min-h-0 flex-1 touch-pan-y flex-col space-y-3 overflow-y-auto overscroll-contain scroll-smooth px-3 pb-3 pt-4"
                 style={{ WebkitOverflowScrolling: 'touch', touchAction: 'pan-y' }}
             >
                 {messages.length >= messageLimit && (
@@ -3038,13 +3083,15 @@ export default function IntercomInterface({ roomData, onLeave, language = 'tr-TR
                     </div>
                 )}
                 {messages.length === 0 ? (
-                    <div className="h-full flex items-center justify-center text-center p-6">
-                            <p className="text-sm text-slate-500 leading-relaxed font-light">
-                                {text.noMessages}
-                            </p>
-                        </div>
+                    <div className="flex h-full items-center justify-center p-6 text-center">
+                        <p className="text-sm font-light leading-relaxed text-slate-500">
+                            {text.noMessages}
+                        </p>
+                    </div>
                 ) : (
-                    messages.filter(msg => !hiddenMessageIds.includes(msg.id)).map((msg) => {
+                    <>
+                        <div className="mt-auto" />
+                        {messages.filter(msg => !hiddenMessageIds.includes(msg.id)).map((msg) => {
                         const isSelf = msg.senderName === nickname;
                         const isSelected = selectedIds.includes(msg.id);
 
@@ -3175,9 +3222,10 @@ export default function IntercomInterface({ roomData, onLeave, language = 'tr-TR
                                 </div>
                             </div>
                         );
-                    })
+                        })}
+                    </>
                 )}
-                <div ref={messagesEndRef} className="h-4" />
+                <div ref={messagesEndRef} className="h-0" />
             </main>
 
             {showScrollToBottom && (
