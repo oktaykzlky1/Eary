@@ -1390,6 +1390,7 @@ export default function IntercomInterface({ roomData, onLeave, language = 'tr-TR
     const ignoreSpeechResultsRef = useRef(false);
     const speechStartInFlightRef = useRef(false);
     const recentVoiceMessagesRef = useRef([]);
+    const lastSentSpeechSnapshotRef = useRef({ text: '', owner: '', timestamp: 0 });
 
     const setSpeechPreview = (value) => {
         interimTextRef.current = value;
@@ -1414,7 +1415,7 @@ export default function IntercomInterface({ roomData, onLeave, language = 'tr-TR
         clearSpeechPreview();
     };
 
-    const closeSpeechCaptureAfterSend = () => {
+    const closeSpeechCaptureAfterSend = async () => {
         ignoreSpeechResultsRef.current = true;
         speechStartInFlightRef.current = false;
         isListeningRef.current = false;
@@ -1425,25 +1426,26 @@ export default function IntercomInterface({ roomData, onLeave, language = 'tr-TR
 
         const recognizer = recognitionRef.current;
         if (!recognizer) return;
+        if (recognitionRef.current === recognizer) {
+            recognitionRef.current = null;
+        }
 
-        Promise.resolve()
-            .then(async () => {
-                if (typeof recognizer.abort === 'function') {
-                    await recognizer.abort();
-                    return;
-                }
-                if (typeof recognizer.stop === 'function') {
-                    await recognizer.stop();
-                }
-            })
-            .catch(error => {
-                console.warn('Speech recognition could not be closed after send:', error);
-            })
-            .finally(() => {
-                if (Capacitor.isNativePlatform() && recognitionRef.current === recognizer) {
-                    recognitionRef.current = null;
-                }
-            });
+        try {
+            await Promise.race([
+                Promise.resolve().then(async () => {
+                    if (typeof recognizer.abort === 'function') {
+                        await recognizer.abort();
+                        return;
+                    }
+                    if (typeof recognizer.stop === 'function') {
+                        await recognizer.stop();
+                    }
+                }),
+                new Promise(resolve => setTimeout(resolve, 900))
+            ]);
+        } catch (error) {
+            console.warn('Speech recognition could not be closed after send:', error);
+        }
     };
 
     const normalizeSpeechWords = value => String(value || '')
@@ -1508,6 +1510,40 @@ export default function IntercomInterface({ roomData, onLeave, language = 'tr-TR
         }
 
         return bestMatch;
+    };
+
+    const stripSentSpeechSnapshot = (value, owner) => {
+        const text = String(value || '').trim();
+        if (!text) return '';
+
+        const snapshot = lastSentSpeechSnapshotRef.current || {};
+        const snapshotText = String(snapshot.text || '').trim();
+        const snapshotIsFresh = Date.now() - Number(snapshot.timestamp || 0) < 2 * 60 * 1000;
+        if (!snapshotText || snapshot.owner !== owner || !snapshotIsFresh) return text;
+
+        const currentWords = text.split(/\s+/).filter(Boolean);
+        const currentNormalized = normalizeSpeechWords(text);
+        const previousNormalized = normalizeSpeechWords(snapshotText);
+        if (currentNormalized.length < 2 || previousNormalized.length < 2) return text;
+
+        let exactPrefixLength = 0;
+        const comparableLength = Math.min(currentNormalized.length, previousNormalized.length);
+        for (let index = 0; index < comparableLength; index += 1) {
+            if (currentNormalized[index] !== previousNormalized[index]) break;
+            exactPrefixLength += 1;
+        }
+
+        const exactCoverage = exactPrefixLength / previousNormalized.length;
+        if (exactPrefixLength >= Math.min(3, previousNormalized.length) && exactCoverage >= 0.72 && currentWords.length > exactPrefixLength) {
+            return currentWords.slice(exactPrefixLength).join(' ').trim();
+        }
+
+        const fuzzyPrefixLength = findLikelyCachedPrefixLength(currentNormalized, previousNormalized);
+        if (fuzzyPrefixLength && currentWords.length > fuzzyPrefixLength) {
+            return currentWords.slice(fuzzyPrefixLength).join(' ').trim();
+        }
+
+        return text;
     };
 
     const getSpeechSenderName = (owner) => {
@@ -1592,6 +1628,11 @@ export default function IntercomInterface({ roomData, onLeave, language = 'tr-TR
         return value.trim();
     };
 
+    const cleanSpeechCandidate = (value, owner) => stripPreviousSpeakerPrefix(
+        stripSentSpeechSnapshot(value, owner),
+        owner
+    );
+
     const isLikelyDuplicateFaceSpeech = (value, owner) => {
         const faceState = faceStateRef.current;
         if (!faceState.splitScreenEnabled || !faceState.faceSessionActive) return false;
@@ -1619,15 +1660,22 @@ export default function IntercomInterface({ roomData, onLeave, language = 'tr-TR
 
     const sendCapturedSpeechText = async (textToSend, lang) => {
         const speechOwner = speechOwnerRef.current;
-        const pendingText = stripPreviousSpeakerPrefix(textToSend, speechOwner);
+        const rawText = String(textToSend || '').trim();
+        const pendingText = cleanSpeechCandidate(rawText, speechOwner);
         if (!pendingText || speechStopSentRef.current || isLikelyDuplicateFaceSpeech(pendingText, speechOwner)) {
             resetSpeechCapture();
+            await closeSpeechCaptureAfterSend();
             return;
         }
         speechStopSentRef.current = true;
         lastCapturedTextRef.current = '';
         finalizedSpeechRef.current = '';
-        closeSpeechCaptureAfterSend();
+        await closeSpeechCaptureAfterSend();
+        lastSentSpeechSnapshotRef.current = {
+            text: rawText,
+            owner: speechOwner,
+            timestamp: Date.now()
+        };
         rememberRecentVoiceMessage(pendingText, speechOwner);
         await sendMessageToCloud(pendingText, true, lang, { speechOwner });
     };
@@ -1678,14 +1726,14 @@ export default function IntercomInterface({ roomData, onLeave, language = 'tr-TR
                 } else if (!previous.endsWith(chunk)) {
                     finalizedSpeechRef.current = `${previous} ${chunk}`.trim();
                 }
-                const cleanedFinal = stripPreviousSpeakerPrefix(finalizedSpeechRef.current, speechOwnerRef.current);
+                const cleanedFinal = cleanSpeechCandidate(finalizedSpeechRef.current, speechOwnerRef.current);
                 lastCapturedTextRef.current = cleanedFinal;
                 setSpeechPreview(cleanedFinal);
             } else if (interimText.trim()) {
                 const preview = shouldReplaceSpeechBuffer
                     ? interimText.trim()
                     : `${finalizedSpeechRef.current} ${interimText.trim()}`.trim();
-                const cleanedPreview = stripPreviousSpeakerPrefix(preview, speechOwnerRef.current);
+                const cleanedPreview = cleanSpeechCandidate(preview, speechOwnerRef.current);
                 setSpeechPreview(cleanedPreview);
                 lastCapturedTextRef.current = cleanedPreview;
             }
