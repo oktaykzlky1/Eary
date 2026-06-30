@@ -1414,6 +1414,38 @@ export default function IntercomInterface({ roomData, onLeave, language = 'tr-TR
         clearSpeechPreview();
     };
 
+    const closeSpeechCaptureAfterSend = () => {
+        ignoreSpeechResultsRef.current = true;
+        speechStartInFlightRef.current = false;
+        isListeningRef.current = false;
+        setIsSpeechStarting(false);
+        setIsListening(false);
+        stopActiveStream();
+        clearSpeechPreview();
+
+        const recognizer = recognitionRef.current;
+        if (!recognizer) return;
+
+        Promise.resolve()
+            .then(async () => {
+                if (typeof recognizer.abort === 'function') {
+                    await recognizer.abort();
+                    return;
+                }
+                if (typeof recognizer.stop === 'function') {
+                    await recognizer.stop();
+                }
+            })
+            .catch(error => {
+                console.warn('Speech recognition could not be closed after send:', error);
+            })
+            .finally(() => {
+                if (Capacitor.isNativePlatform() && recognitionRef.current === recognizer) {
+                    recognitionRef.current = null;
+                }
+            });
+    };
+
     const normalizeSpeechWords = value => String(value || '')
         .toLocaleLowerCase('tr-TR')
         .replace(/[^\p{L}\p{N}\s]/gu, ' ')
@@ -1595,7 +1627,7 @@ export default function IntercomInterface({ roomData, onLeave, language = 'tr-TR
         speechStopSentRef.current = true;
         lastCapturedTextRef.current = '';
         finalizedSpeechRef.current = '';
-        clearSpeechPreview();
+        closeSpeechCaptureAfterSend();
         rememberRecentVoiceMessage(pendingText, speechOwner);
         await sendMessageToCloud(pendingText, true, lang, { speechOwner });
     };
@@ -1668,6 +1700,12 @@ export default function IntercomInterface({ roomData, onLeave, language = 'tr-TR
                 resetSpeechCapture();
                 stopActiveStream();
                 playBeep('stop');
+                return;
+            }
+            if (ignoreSpeechResultsRef.current || speechStopSentRef.current) {
+                setIsListening(false);
+                resetSpeechCapture();
+                stopActiveStream();
                 return;
             }
             const pendingText = getPendingSpeechText();
