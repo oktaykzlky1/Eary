@@ -268,10 +268,6 @@ class NativeSpeechRecognizer {
                 const nativeText = String(data?.matches?.[0] || '').trim();
                 this.lastNativeText = nativeText || this.lastNativeText;
                 const isIosNativeSpeech = Capacitor.getPlatform() === 'ios';
-                if (isIosNativeSpeech && nativeText) {
-                    lastIosNativeTranscript = nativeText;
-                    lastIosNativeTranscriptAt = Date.now();
-                }
                 const text = isIosNativeSpeech
                     ? stripIosNativeTranscriptCarryover(nativeText, this.sessionBaselineText)
                     : nativeText;
@@ -320,11 +316,6 @@ class NativeSpeechRecognizer {
         if (this.isEnding) return;
         this.isEnding = true;
         const wasListening = this.isListening;
-        const nativeText = this.lastNativeText.trim();
-        if (Capacitor.getPlatform() === 'ios' && nativeText) {
-            lastIosNativeTranscript = nativeText;
-            lastIosNativeTranscriptAt = Date.now();
-        }
         this.isListening = false;
         this.sessionId = 0;
 

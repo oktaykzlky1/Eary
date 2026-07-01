@@ -1417,6 +1417,15 @@ export default function IntercomInterface({ roomData, onLeave, language = 'tr-TR
         clearSpeechPreview();
     };
 
+    const resetSpeechSessionBuffers = () => {
+        lastCapturedTextRef.current = '';
+        finalizedSpeechRef.current = '';
+        interimTextRef.current = '';
+        speechStopSentRef.current = false;
+        ignoreSpeechResultsRef.current = false;
+        clearSpeechPreview();
+    };
+
     const closeSpeechCaptureAfterSend = async () => {
         ignoreSpeechResultsRef.current = true;
         speechClosingRef.current = true;
@@ -1711,11 +1720,11 @@ export default function IntercomInterface({ roomData, onLeave, language = 'tr-TR
         }
         speechStopSentRef.current = true;
         lastSentSpeechSnapshotRef.current = {
-            text: rawText,
+            text: pendingText,
             owner: speechOwner,
             timestamp: Date.now()
         };
-        rememberNativeSpeechTranscript(rawText || pendingText);
+        rememberNativeSpeechTranscript(pendingText);
         rememberRecentVoiceMessage(pendingText, speechOwner);
         lastCapturedTextRef.current = '';
         finalizedSpeechRef.current = '';
@@ -1742,8 +1751,9 @@ export default function IntercomInterface({ roomData, onLeave, language = 'tr-TR
     };
 
     // Dynamic Speech Recognition manager
-    const getOrInitRecognizer = (lang) => {
-        if (recognitionRef.current && recognitionRef.current.lang === lang) {
+    const getOrInitRecognizer = (lang, sessionToken = speechSessionRef.current) => {
+        const isNativeSpeech = Capacitor.isNativePlatform();
+        if (!isNativeSpeech && recognitionRef.current && recognitionRef.current.lang === lang) {
             return recognitionRef.current;
         }
         if (recognitionRef.current) {
@@ -1752,9 +1762,11 @@ export default function IntercomInterface({ roomData, onLeave, language = 'tr-TR
             } catch (e) {
                 console.error(e);
             }
+            recognitionRef.current = null;
         }
 
         const handleResult = (finalText, interimText) => {
+            if (speechSessionRef.current !== sessionToken) return;
             if (ignoreSpeechResultsRef.current || speechStopSentRef.current) return;
             const isNativeSpeech = Capacitor.isNativePlatform();
             const isFaceSpeech = faceStateRef.current.splitScreenEnabled && faceStateRef.current.faceSessionActive;
@@ -1783,6 +1795,7 @@ export default function IntercomInterface({ roomData, onLeave, language = 'tr-TR
         };
 
         const handleEnd = () => {
+            if (speechSessionRef.current !== sessionToken) return;
             setIsSpeechStarting(false);
             speechStartInFlightRef.current = false;
             if (suppressNextSpeechEndRef.current) {
@@ -1814,6 +1827,7 @@ export default function IntercomInterface({ roomData, onLeave, language = 'tr-TR
         };
 
         const handleError = (e) => {
+            if (speechSessionRef.current !== sessionToken) return;
             console.error("Speech Recognition Error:", e);
             setIsSpeechStarting(false);
             speechStartInFlightRef.current = false;
@@ -1879,13 +1893,10 @@ export default function IntercomInterface({ roomData, onLeave, language = 'tr-TR
     const toggleListening = async (targetLang = speechLang) => {
         if (speechStartInFlightRef.current || speechClosingRef.current) return;
         const actualLang = (typeof targetLang === 'string') ? targetLang : speechLang;
-        const rec = getOrInitRecognizer(actualLang);
-        if (!rec) {
-            alert("Speech recognition is not supported on this browser/device.");
-            return;
-        }
 
         if (isListeningRef.current) {
+            const rec = recognitionRef.current;
+            if (!rec) return;
             const pendingBeforeStop = getPendingSpeechText();
             ignoreSpeechResultsRef.current = true;
             speechStartInFlightRef.current = true;
@@ -1914,12 +1925,11 @@ export default function IntercomInterface({ roomData, onLeave, language = 'tr-TR
             speechStartInFlightRef.current = true;
             setIsSpeechStarting(true);
             setActiveRecognitionLang(actualLang);
-            speechSessionRef.current += 1;
+            const sessionToken = speechSessionRef.current + 1;
+            speechSessionRef.current = sessionToken;
             speechOwnerRef.current = splitScreenEnabled && faceSessionActive ? faceSpeakerRef.current : 'host';
             speechSessionBaselinesRef.current = buildSpeechSessionBaselines(speechOwnerRef.current);
-            resetSpeechCapture();
-            speechStopSentRef.current = false;
-            ignoreSpeechResultsRef.current = false;
+            resetSpeechSessionBuffers();
             const shouldResetRecognizerBeforeStart = Capacitor.isNativePlatform() || (splitScreenEnabled && faceSessionActive);
             if (shouldResetRecognizerBeforeStart) {
                 try {
@@ -1931,7 +1941,13 @@ export default function IntercomInterface({ roomData, onLeave, language = 'tr-TR
             }
             setSpeechPreview('Mikrofon hazırlanıyor...');
             try {
-                const freshRec = shouldResetRecognizerBeforeStart ? getOrInitRecognizer(actualLang) : rec;
+                const freshRec = getOrInitRecognizer(actualLang, sessionToken);
+                if (!freshRec) {
+                    alert("Speech recognition is not supported on this browser/device.");
+                    speechStartInFlightRef.current = false;
+                    setIsSpeechStarting(false);
+                    return;
+                }
                 await freshRec.start();
                 speechStartInFlightRef.current = false;
                 setIsSpeechStarting(false);
