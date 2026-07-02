@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import {
     AlertTriangle, ArrowLeft, BellRing, Captions,
     Check, ChevronRight, CircleHelp, ContactRound, DoorOpen, Flame,
-    HeartPulse, History, Languages, MessageCircle, Mic, PanelsTopLeft, Phone, Plus, Save, ShieldAlert,
+    FileText, HeartPulse, History, Languages, MessageCircle, Mic, PanelsTopLeft, Phone, Plus, Save, ShieldAlert,
     Sparkles, Star, StopCircle, Trash2, UserRound, Volume2, X
 } from 'lucide-react';
 import { getDuoSpeechRecognizer } from '../utils/speech';
@@ -50,6 +50,22 @@ const LISTENING_REPLACEMENTS = [
     [/\btahlil\b/giu, 'tahlil']
 ];
 
+const SUMMARY_MIN_WORDS = 40;
+const SUMMARY_MIN_SENTENCES = 2;
+
+const addLightPunctuation = text => {
+    let next = String(text || '')
+        .replace(/\s+/g, ' ')
+        .replace(/\s+([.,!?])/g, '$1')
+        .trim();
+    if (!next) return '';
+    next = next.replace(/\b(ancak|fakat|ama|çünkü|bu yüzden|bu nedenle|sonra|ardından|buna rağmen|özellikle|sonuç olarak)\b/giu, match => `. ${match.toLocaleLowerCase('tr-TR')}`);
+    next = next.replace(/\s*\.\s*/g, '. ').replace(/\s+/g, ' ').trim();
+    next = next.replace(/(^|[.!?]\s+)(\p{L})/gu, (_, prefix, letter) => `${prefix}${letter.toLocaleUpperCase('tr-TR')}`);
+    if (!/[.!?]$/.test(next)) next += '.';
+    return next;
+};
+
 const cleanListeningText = (text, language = 'tr-TR') => {
     let next = correctTranscription(String(text || ''), language)
         .replace(/\s+/g, ' ')
@@ -59,7 +75,7 @@ const cleanListeningText = (text, language = 'tr-TR') => {
         next = next.replace(pattern, replacement);
     });
     next = next.replace(/\s+([.,!?])/g, '$1');
-    return next;
+    return addLightPunctuation(next);
 };
 
 const isImportantListeningText = (text, contextConfig) => {
@@ -72,6 +88,12 @@ const summarizeListeningLines = lines => {
     if (!lines.length) return 'Henüz özetlenecek konuşma yok.';
     return buildListeningSummary(lines);
 };
+
+const countWords = value => String(value || '').trim().split(/\s+/).filter(Boolean).length;
+
+const countSentences = value => String(value || '').split(/[.!?]+/).map(item => item.trim()).filter(Boolean).length;
+
+const shouldOfferSummary = value => countWords(value) >= SUMMARY_MIN_WORDS || countSentences(value) >= SUMMARY_MIN_SENTENCES;
 
 const SUMMARY_FILLERS = [
     'yani', 'hani', 'şey', 'şimdi', 'aslında', 'böyle', 'biraz', 'tamam', 'evet', 'ıı', 'eee'
@@ -89,6 +111,26 @@ const splitListeningSentences = lines => lines
         line
     }))
     .filter(item => item.text.length > 8);
+
+const SUMMARY_STOP_WORDS = new Set([
+    've', 'veya', 'ile', 'için', 'gibi', 'çok', 'daha', 'bir', 'bu', 'şu', 'o', 'da', 'de',
+    'mi', 'mı', 'mu', 'mü', 'ise', 'olan', 'olarak', 'kadar', 'tüm', 'bütün', 'şey'
+]);
+
+const importantTermsFrom = text => String(text || '')
+    .split(/\s+/)
+    .map(word => word.replace(/[^\p{L}\p{N}]/gu, '').trim())
+    .filter(word => word.length >= 4 && !SUMMARY_STOP_WORDS.has(word.toLocaleLowerCase('tr-TR')))
+    .filter((word, index, list) => list.findIndex(item => item.toLocaleLowerCase('tr-TR') === word.toLocaleLowerCase('tr-TR')) === index)
+    .slice(0, 3)
+    .join(' ');
+
+const compactClause = text => {
+    const clean = String(text || '').replace(/[.!?]+$/, '').trim();
+    const words = clean.split(/\s+/).filter(Boolean);
+    if (words.length <= 16) return clean;
+    return words.slice(0, 16).join(' ');
+};
 
 const sentenceSummaryScore = (text, line, index, total) => {
     const lower = text.toLocaleLowerCase('tr-TR');
@@ -113,8 +155,36 @@ const buildListeningSummary = (lines, focusId = null) => {
     const usableLines = focusId ? lines.filter(line => Number(line.id) <= Number(focusId)) : lines;
     const sentenceItems = splitListeningSentences(usableLines);
     if (!sentenceItems.length) return 'Konuşma metni henüz yeterince net değil.';
+    const allText = usableLines.map(line => line.text).join(' ');
+    if (!shouldOfferSummary(allText)) return 'Bu metin kısa olduğu için ayrıca özet gerektirmiyor.';
 
     const focusIndex = focusId ? sentenceItems.findIndex(item => item.line.id === focusId) : -1;
+    const semanticGroups = [
+        { type: 'purpose', pattern: /(amaç|hedef|istem|plan|fethet|almak|ulaşmak|kurmak|hazırlamak)/i },
+        { type: 'obstacle', pattern: /(ancak|fakat|ama|zorland|geçemedi|kısıtlı|engel|sorun|eksik|risk|rahatça|karşısına)/i },
+        { type: 'tool', pattern: /(top|araç|teçhizat|sistem|yöntem|çözüm|kullanım|rol|önem|kritik)/i },
+        { type: 'result', pattern: /(sonuç|zafer|kazandır|değiştir|başar|tamamlan|sağladı|getirdi|oldu)/i }
+    ].map(group => ({
+        ...group,
+        item: sentenceItems.find(item => group.pattern.test(item.text.toLocaleLowerCase('tr-TR')))
+    })).filter(group => group.item);
+
+    if (semanticGroups.length >= 2) {
+        const linesByType = [];
+        const seenTypes = new Set();
+        semanticGroups.forEach(group => {
+            if (seenTypes.has(group.type)) return;
+            seenTypes.add(group.type);
+            const subject = importantTermsFrom(group.item.text);
+            const clause = compactClause(group.item.text);
+            if (group.type === 'purpose') linesByType.push(`${subject || 'Konuşmanın ana konusu'}, ${clause.toLocaleLowerCase('tr-TR')}.`);
+            if (group.type === 'obstacle') linesByType.push(`Ana zorluk: ${clause}.`);
+            if (group.type === 'tool') linesByType.push(`Kritik unsur: ${clause}.`);
+            if (group.type === 'result') linesByType.push(`Sonuç: ${clause}.`);
+        });
+        if (linesByType.length >= 2) return linesByType.slice(0, 4).map(item => `• ${item}`).join('\n');
+    }
+
     const ranked = sentenceItems
         .map((item, index) => ({
             ...item,
@@ -509,6 +579,13 @@ function AmbientListeningTool({ onBack }) {
         }));
     };
 
+    const canSummarizeUntil = id => shouldOfferSummary(captions
+        .filter(line => Number(line.id) <= Number(id))
+        .map(line => line.text)
+        .join(' '));
+
+    const canSummarizeSession = shouldOfferSummary(captions.map(line => line.text).join(' '));
+
     const saveSession = () => {
         const sessions = loadJson('eary_caption_sessions', []);
         const summary = groupedCaptions.map(group => ({ title: group.title, lineIds: group.lines.map(line => line.id) }));
@@ -544,7 +621,7 @@ function AmbientListeningTool({ onBack }) {
                     <h1 className="font-bold">Ortam Dinleme</h1>
                     <p className="eary-muted truncate text-[10px]">Canlı metin, anlam düzeltme, özet ve önemli notlar</p>
                 </div>
-                <button onClick={refreshSummary} disabled={!captions.length} className={`flex h-10 w-10 items-center justify-center rounded-lg disabled:opacity-30 ${summaryOpen ? 'eary-brand-bg' : 'eary-soft eary-brand'}`} title="Özetle"><Sparkles size={18}/></button>
+                <button onClick={refreshSummary} disabled={!canSummarizeSession} className={`flex h-10 w-10 items-center justify-center rounded-lg disabled:opacity-30 ${summaryOpen ? 'eary-brand-bg' : 'eary-soft eary-brand'}`} title="Özetle"><Sparkles size={18}/></button>
                 <button onClick={saveSession} disabled={!captions.length} className="eary-soft eary-brand flex h-10 w-10 items-center justify-center rounded-lg disabled:opacity-30" title="Oturumu kaydet">{saved ? <Check size={18}/> : <Save size={18}/>}</button>
             </header>
 
@@ -606,11 +683,13 @@ function AmbientListeningTool({ onBack }) {
                                         {lineSummaries[line.id]}
                                     </div>
                                 )}
-                                <div className="mt-2 flex justify-end">
-                                    <button type="button" onClick={() => summarizeLine(line.id)} className="eary-soft eary-brand flex items-center gap-1 rounded-md px-2.5 py-1.5 text-[10px] font-bold" title="Bu bölüme kadar özetle">
-                                        <Sparkles size={12}/> Özetle
-                                    </button>
-                                </div>
+                                {canSummarizeUntil(line.id) && (
+                                    <div className="mt-2 flex justify-end">
+                                        <button type="button" onClick={() => summarizeLine(line.id)} className="eary-soft eary-brand flex items-center gap-1 rounded-md px-2.5 py-1.5 text-[10px] font-bold" title="Bu bölüme kadar özetle">
+                                            <Sparkles size={12}/> Özetle
+                                        </button>
+                                    </div>
+                                )}
                             </article>
                         ))}
                         {interim && <div className="rounded-lg border border-dashed eary-line p-3 text-sm italic eary-muted">{interim}</div>}
@@ -630,6 +709,181 @@ function AmbientListeningTool({ onBack }) {
                     {contextConfig.phrases.map(phrase => <button key={phrase} onClick={() => speakTurkish(phrase)} className="eary-soft eary-brand shrink-0 rounded-full px-3 py-2 text-[10px] font-bold">{phrase}</button>)}
                 </div>
             </div>
+        </main>
+    );
+}
+
+const makeNoteTitle = text => {
+    const words = String(text || '').replace(/[^\p{L}\p{N}\s]/gu, ' ').trim().split(/\s+/).filter(Boolean);
+    if (!words.length) return 'Yeni sesli not';
+    return words.slice(0, 20).join(' ');
+};
+
+function VoiceNotebook({ onBack }) {
+    const [noteText, setNoteText] = useState(() => localStorage.getItem('eary_voice_note_draft') || '');
+    const [interim, setInterim] = useState('');
+    const [listening, setListening] = useState(false);
+    const [saved, setSaved] = useState(false);
+    const [language, setLanguage] = useState(() => localStorage.getItem('eary_notebook_language') || getInitialAppLanguage());
+    const [targetLang, setTargetLang] = useState(() => localStorage.getItem('eary_notebook_target_lang') || 'tr-TR');
+    const [translation, setTranslation] = useState('');
+    const [translating, setTranslating] = useState(false);
+    const recognizerRef = useRef(null);
+    const interimRef = useRef('');
+    const sessionRef = useRef(0);
+
+    useEffect(() => localStorage.setItem('eary_voice_note_draft', noteText), [noteText]);
+    useEffect(() => localStorage.setItem('eary_notebook_language', language), [language]);
+    useEffect(() => localStorage.setItem('eary_notebook_target_lang', targetLang), [targetLang]);
+    useEffect(() => () => recognizerRef.current?.abort?.(), []);
+
+    const appendToNote = rawText => {
+        const clean = cleanListeningText(rawText, language);
+        if (!clean) return;
+        setNoteText(current => [current.trim(), clean].filter(Boolean).join('\n\n'));
+        setTranslation('');
+    };
+
+    const stopListening = () => {
+        const recognizer = recognizerRef.current;
+        const pending = interimRef.current.trim();
+        sessionRef.current += 1;
+        interimRef.current = '';
+        setInterim('');
+        setListening(false);
+        if (pending) appendToNote(pending);
+        requestAnimationFrame(() => {
+            setTimeout(() => {
+                try {
+                    if (typeof recognizer?.abort === 'function') recognizer.abort();
+                    else recognizer?.stop?.();
+                } catch (error) {
+                    console.warn('Notebook speech recognition could not be stopped:', error);
+                }
+            }, 30);
+        });
+    };
+
+    const startListening = async () => {
+        const sessionId = sessionRef.current + 1;
+        sessionRef.current = sessionId;
+        interimRef.current = '';
+        setInterim('');
+        setListening(false);
+        const recognizer = getDuoSpeechRecognizer(language, (finalText, interimText) => {
+            if (sessionRef.current !== sessionId) return;
+            const nextInterim = interimText ? cleanListeningText(interimText, language).replace(/[.!?]$/, '') : '';
+            interimRef.current = nextInterim;
+            setInterim(nextInterim);
+            if (finalText?.trim()) {
+                appendToNote(finalText);
+                interimRef.current = '';
+                setInterim('');
+            }
+        }, () => {
+            if (sessionRef.current !== sessionId) return;
+            setListening(false);
+            const pending = interimRef.current.trim();
+            interimRef.current = '';
+            setInterim('');
+            if (pending) appendToNote(pending);
+        }, error => {
+            if (sessionRef.current !== sessionId) return;
+            setListening(false);
+            setInterim(String(error?.message || 'Mikrofon başlatılamadı'));
+            setTimeout(() => setInterim(''), 2400);
+        });
+        recognizerRef.current = recognizer;
+        try {
+            await recognizer.start();
+            if (sessionRef.current === sessionId) setListening(true);
+        } catch (error) {
+            setListening(false);
+            setInterim(String(error?.message || 'Mikrofon başlatılamadı'));
+            setTimeout(() => setInterim(''), 2400);
+        }
+    };
+
+    const toggleListening = () => {
+        if (listening) stopListening();
+        else startListening();
+    };
+
+    const saveNote = () => {
+        if (!noteText.trim()) return;
+        const notes = loadJson('eary_voice_notes', []);
+        const item = { id: Date.now(), title: makeNoteTitle(noteText), text: noteText.trim(), language, createdAt: Date.now() };
+        localStorage.setItem('eary_voice_notes', JSON.stringify([item, ...notes].slice(0, 50)));
+        setSaved(true);
+        setTimeout(() => setSaved(false), 1800);
+    };
+
+    const translateNote = async () => {
+        if (!noteText.trim()) return;
+        setTranslating(true);
+        const result = await translateText(noteText, targetLang, language);
+        setTranslation(result || 'Çeviri alınamadı.');
+        setTranslating(false);
+    };
+
+    const clearNote = () => {
+        setNoteText('');
+        setInterim('');
+        setTranslation('');
+        localStorage.removeItem('eary_voice_note_draft');
+    };
+
+    return (
+        <main className="eary-shell mx-auto flex h-screen w-full max-w-md flex-col overflow-hidden sm:h-[800px] sm:rounded-xl sm:border sm:eary-line">
+            <header className="eary-ios-safe-header flex items-center gap-3 border-b eary-line px-4 pb-3">
+                <button type="button" onClick={onBack} className="eary-soft eary-muted flex h-10 w-10 items-center justify-center rounded-lg" aria-label="Geri dön"><ArrowLeft size={20} /></button>
+                <span className="eary-brand-bg flex h-10 w-10 items-center justify-center rounded-lg"><FileText size={20} /></span>
+                <div className="min-w-0 flex-1">
+                    <h1 className="font-bold">Not Defteri</h1>
+                    <p className="eary-muted truncate text-[10px]">Ders, toplantı veya günlük notlar için bas-konuş</p>
+                </div>
+                <button type="button" onClick={saveNote} disabled={!noteText.trim()} className="eary-soft eary-brand flex h-10 w-10 items-center justify-center rounded-lg disabled:opacity-30" title="Notu kaydet">{saved ? <Check size={18}/> : <Save size={18}/>}</button>
+            </header>
+
+            <section className="grid grid-cols-2 gap-2 border-b eary-line px-4 py-3">
+                <label className="block text-[10px] font-black uppercase eary-muted">Konuşma dili
+                    <select value={language} onChange={event => setLanguage(event.target.value)} disabled={listening} className="eary-input mt-1 w-full rounded-lg border px-2 py-2 text-xs font-bold normal-case disabled:opacity-60">
+                        {SUPPORTED_LANGUAGES.map(item => <option key={item.code} value={item.code}>{item.nativeLabel}</option>)}
+                    </select>
+                </label>
+                <label className="block text-[10px] font-black uppercase eary-muted">Çeviri dili
+                    <select value={targetLang} onChange={event => setTargetLang(event.target.value)} className="eary-input mt-1 w-full rounded-lg border px-2 py-2 text-xs font-bold normal-case">
+                        {SUPPORTED_LANGUAGES.map(item => <option key={item.code} value={item.code}>{item.nativeLabel}</option>)}
+                    </select>
+                </label>
+            </section>
+
+            <section className="flex-1 overflow-y-auto px-4 py-4">
+                <textarea
+                    value={noteText}
+                    onChange={event => { setNoteText(event.target.value); setTranslation(''); }}
+                    placeholder="Konuşarak veya yazarak not alın..."
+                    className="eary-input min-h-[55vh] w-full resize-none rounded-lg border p-4 text-[17px] font-semibold leading-8"
+                    aria-label="Not metni"
+                />
+                {interim && <div className="mt-3 rounded-lg border border-dashed eary-line p-3 text-sm italic eary-muted">{interim}</div>}
+                <div className="mt-3 flex flex-wrap justify-end gap-2">
+                    <button type="button" onClick={translateNote} disabled={!noteText.trim() || translating} className="eary-soft eary-brand flex items-center gap-1.5 rounded-lg px-3 py-2 text-[11px] font-bold disabled:opacity-30"><Languages size={14}/>{translating ? 'Çevriliyor' : 'Çevir'}</button>
+                    <button type="button" onClick={saveNote} disabled={!noteText.trim()} className="eary-soft eary-brand flex items-center gap-1.5 rounded-lg px-3 py-2 text-[11px] font-bold disabled:opacity-30"><Save size={14}/>Kaydet</button>
+                    <button type="button" onClick={clearNote} disabled={!noteText.trim() && !interim} className="eary-soft eary-muted flex items-center gap-1.5 rounded-lg px-3 py-2 text-[11px] font-bold disabled:opacity-30"><Trash2 size={14}/>Temizle</button>
+                </div>
+                {translation && <article className="mt-3 rounded-lg border border-emerald-200 bg-emerald-50 p-3 text-sm font-semibold leading-6 text-emerald-950 whitespace-pre-line">{translation}</article>}
+            </section>
+
+            <footer className="border-t eary-line bg-[var(--surface)] px-4 py-3 pb-[max(12px,env(safe-area-inset-bottom))]">
+                <div className="flex items-center justify-between gap-3">
+                    <div className="min-w-0">
+                        <p className="text-xs font-bold">{listening ? 'Mikrofon açık' : 'Mikrofon kapalı'}</p>
+                        <p className="eary-muted truncate text-[10px]">{getLanguageLabel(language)} · {countWords(noteText)} kelime</p>
+                    </div>
+                    <button type="button" onClick={toggleListening} className={`flex h-14 w-14 shrink-0 items-center justify-center rounded-full text-white shadow-lg ${listening ? 'bg-rose-600' : 'eary-brand-bg'}`} aria-label={listening ? 'Not diktesini durdur' : 'Not diktesini başlat'}>{listening ? <StopCircle size={26}/> : <Mic size={26}/>}</button>
+                </div>
+            </footer>
         </main>
     );
 }
@@ -905,6 +1159,7 @@ export default function AccessibilityHub({ account, onOpenChats, onOpenSettings 
     }, [showContacts, view]);
     if (view==='environment') return <EnvironmentMonitor onBack={()=>setView('home')}/>;
     if (view==='ambient') return <AmbientListeningTool onBack={()=>setView('home')}/>;
+    if (view==='notebook') return <VoiceNotebook onBack={()=>setView('home')}/>;
     if (view==='emergency') return <EmergencyCard nickname={account?.nickname} onBack={()=>setView('home')}/>;
     if (view==='face') return <FaceToFaceTool onBack={()=>setView('home')}/>;
     const addContact=()=>{if(!newContact.name.trim()||!newContact.phone.trim())return;const next=[...quickContacts,{id:Date.now(),...newContact}];setQuickContacts(next);localStorage.setItem('eary_quick_contacts',JSON.stringify(next));setNewContact({name:'',phone:''});};
@@ -929,9 +1184,9 @@ export default function AccessibilityHub({ account, onOpenChats, onOpenSettings 
                         </span>
                         <ChevronRight size={18}/>
                     </button>
-                    <button type="button" onClick={()=>setView('environment')} className="col-span-2 flex items-center gap-4 rounded-lg bg-[#172f29] p-4 text-left text-white">
-                        <span className="flex h-12 w-12 items-center justify-center rounded-lg bg-white/10"><BellRing size={23}/></span>
-                        <span className="flex-1"><span className="block text-sm font-bold">Çevresel Ses Uyarıları</span><span className="mt-1 block text-[10px] leading-4 text-white/70">Zil, alarm, korna ve isminiz için titreşimli bildirim</span></span>
+                    <button type="button" onClick={()=>setView('notebook')} className="col-span-2 flex items-center gap-4 rounded-lg bg-[#172f29] p-4 text-left text-white">
+                        <span className="flex h-12 w-12 items-center justify-center rounded-lg bg-white/10"><FileText size={23}/></span>
+                        <span className="flex-1"><span className="block text-sm font-bold">Not Defteri</span><span className="mt-1 block text-[10px] leading-4 text-white/70">Ders, toplantı veya günlük notları bas-konuş ile yazıya çevir</span></span>
                         <ChevronRight size={18}/>
                     </button>
                     <button type="button" onClick={()=>setView('face')} className="col-span-2 flex items-center gap-4 rounded-lg border border-violet-200 bg-violet-50 p-4 text-left text-violet-900">
