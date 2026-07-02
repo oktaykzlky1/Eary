@@ -56,6 +56,7 @@ import { normalizeAppLanguage } from '../utils/language';
 const VoiceSettings = registerPlugin('VoiceSettings');
 const FACE_TO_FACE_PHRASES = ['Tekrar eder misiniz?', 'Biraz yavaş konuşur musunuz?', 'Lütfen yüzüme bakarak konuşun', 'Bunu yazabilir misiniz?'];
 const TEST_BOT_NAME = 'Eary Test Bot';
+const notifyUser = detail => window.dispatchEvent(new CustomEvent('eary:toast', { detail }));
 
 const getTestBotReply = text => {
     const normalized = text.toLocaleLowerCase('tr-TR');
@@ -1987,7 +1988,7 @@ export default function IntercomInterface({ roomData, onLeave, language = 'tr-TR
             try {
                 const freshRec = getOrInitRecognizer(actualLang, sessionToken);
                 if (!freshRec) {
-                    alert("Speech recognition is not supported on this browser/device.");
+                    notifyUser('Bu cihazda konuşma tanıma desteklenmiyor.');
                     speechStartInFlightRef.current = false;
                     setIsSpeechStarting(false);
                     return;
@@ -2365,7 +2366,7 @@ export default function IntercomInterface({ roomData, onLeave, language = 'tr-TR
     const triggerTestNotification = async () => {
         const granted = await requestNotificationPermission();
         if (!granted) {
-            alert("Bildirim izni etkin değil! Bildirimleri alabilmek için lütfen telefonunuzun uygulama ayarlarından bildirim izinlerini açın.");
+            notifyUser('Bildirim izni kapalı. Telefon ayarlarından Eary bildirimlerini açın.');
         }
         scheduleNotification(text.testAlertTitle, text.testAlertBody);
     };
@@ -3522,11 +3523,11 @@ export default function IntercomInterface({ roomData, onLeave, language = 'tr-TR
                                         try {
                                             const res = await VoiceSettings.openSettings();
                                             if (!res || !res.success) {
-                                                alert("Ses ayarları doğrudan açılamadı. Lütfen telefonunuzun Ayarlar -> Dil ve Giriş (Settings -> Languages & Input) kısmından Çevrimdışı Ses Tanıma dilinizi indirin.");
+                                                notifyUser('Ses ayarları açılamadı. Ayarlar > Dil ve Giriş bölümünden çevrimdışı ses tanımayı kontrol edin.');
                                             }
                                             setSpeechError(null);
                                         } catch (e) {
-                                            alert("Eklenti Çağrı Hatası: " + e.message);
+                                            notifyUser(`Ses ayarları açılamadı: ${e.message}`);
                                         }
                                     }}
                                     className="w-full py-2.5 bg-indigo-600 hover:bg-indigo-500 text-slate-100 font-bold rounded-xl text-xs transition-all active:scale-95 cursor-pointer"
@@ -3584,10 +3585,10 @@ export default function IntercomInterface({ roomData, onLeave, language = 'tr-TR
                                                 try {
                                                     await VoiceSettings.openNotificationSettings();
                                                 } catch {
-                                                    alert("Bildirim ayarları açılırken hata oluştu.");
+                                                    notifyUser('Bildirim ayarları açılırken hata oluştu.');
                                                 }
                                             } else {
-                                                alert("Bildirim Ayarları sadece Android uygulaması üzerinden açılabilir. Lütfen Ayarlar -> Uygulamalar -> Eary -> Bildirimler yolunu izleyin.");
+                                                notifyUser('Bildirim ayarları Android uygulaması üzerinden açılabilir.');
                                             }
                                         }}
                                         className="text-[10px] font-bold bg-indigo-650 hover:bg-indigo-500 text-slate-100 px-3 py-1.5 rounded-lg transition-all cursor-pointer shadow-sm shadow-indigo-650/10"
@@ -3611,10 +3612,10 @@ export default function IntercomInterface({ roomData, onLeave, language = 'tr-TR
                                                 try {
                                                     await VoiceSettings.openBatterySettings();
                                                 } catch {
-                                                    alert("Pil ayarları açılırken hata oluştu.");
+                                                    notifyUser('Pil ayarları açılırken hata oluştu.');
                                                 }
                                             } else {
-                                                alert("Pil Ayarları sadece Android uygulaması üzerinden açılabilir. Lütfen Ayarlar -> Uygulamalar -> Eary -> Pil bölümünden 'Sınırsız' yapın.");
+                                                notifyUser('Pil ayarları Android uygulaması üzerinden açılabilir.');
                                             }
                                         }}
                                         className="text-[10px] font-bold bg-amber-650 hover:bg-amber-500 text-slate-100 px-3 py-1.5 rounded-lg transition-all cursor-pointer shadow-sm shadow-amber-650/10"
@@ -3660,10 +3661,10 @@ export default function IntercomInterface({ roomData, onLeave, language = 'tr-TR
                                                 try {
                                                     await VoiceSettings.openBluetoothSettings();
                                                 } catch {
-                                                    alert("Bluetooth ayarları açılamadı.");
+                                                    notifyUser('Bluetooth ayarları açılamadı.');
                                                 }
                                             } else {
-                                                alert("Bluetooth ayarları sadece Android üzerinden açılabilir.");
+                                                notifyUser('Bluetooth ayarları Android üzerinden açılabilir.');
                                             }
                                         }}
                                         className="text-[10px] font-bold bg-slate-800 hover:bg-slate-700 text-slate-350 px-3 py-1.5 rounded-lg transition-all cursor-pointer"

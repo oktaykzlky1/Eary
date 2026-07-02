@@ -2,6 +2,8 @@ import { useState, useEffect, useRef } from 'react';
 import { db, ref, onValue, set, remove } from '../firebase';
 import { LogOut, ZoomIn, ZoomOut, Volume2, MessageSquare, ArrowLeft } from 'lucide-react';
 
+const notifyUser = detail => window.dispatchEvent(new CustomEvent('eary:toast', { detail }));
+
 const TRANSLATIONS = {
     'tr-TR': {
         title: 'Yansıtma Ekranı (Display)',
@@ -213,9 +215,8 @@ export default function DisplayMode({ roomId, onLeave, onUpdateRole, language = 
                             {/* Switch to Intercom (Sohbet) */}
                             <button 
                                 onClick={() => {
-                                    if (confirm(language.startsWith('de') ? 'In Sohbet/Intercom Modus wechseln?' : language.startsWith('en') ? 'Switch to Intercom Mode?' : 'Normal Sohbet/İnterkom moduna geçmek istiyor musunuz?')) {
-                                        onUpdateRole('intercom');
-                                    }
+                                    notifyUser(language.startsWith('de') ? 'Intercom-Modus wird geöffnet' : language.startsWith('en') ? 'Opening intercom mode' : 'Sohbet moduna geçiliyor');
+                                    onUpdateRole('intercom');
                                 }}
                                 className="flex items-center gap-1.5 px-2.5 py-1.5 md:px-4 md:py-2 bg-[#F4F0FC] hover:bg-[#EBE5F7] border border-[#DCD0EC]/60 rounded-xl text-[#7B52AB] font-medium text-xs md:text-sm transition-all duration-200 hover:shadow-lg active:scale-95 cursor-pointer"
                                 title={text.switchToIntercom}

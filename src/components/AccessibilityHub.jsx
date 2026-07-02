@@ -1,24 +1,16 @@
 import { useEffect, useRef, useState } from 'react';
 import {
-    AlertTriangle, ArrowLeft, BellRing, Captions,
-    Check, ChevronRight, CircleHelp, ContactRound, DoorOpen, Flame,
-    FileText, HeartPulse, History, Languages, MessageCircle, Mic, PanelsTopLeft, Phone, Plus, Save, ShieldAlert,
+    ArrowLeft, Captions,
+    Check, ChevronRight, CircleHelp, ContactRound,
+    FileText, History, Languages, MessageCircle, Mic, PanelsTopLeft, Phone, Save, ShieldAlert,
     Sparkles, Star, StopCircle, Trash2, UserRound, Volume2, X
 } from 'lucide-react';
 import { getDuoSpeechRecognizer } from '../utils/speech';
-import { requestNotificationPermission, scheduleNotification } from '../utils/notifications';
 import { correctTranscription } from '../utils/autocorrect';
 import { SUPPORTED_LANGUAGES, getInitialAppLanguage, getLanguageLabel } from '../utils/language';
 import { Capacitor, registerPlugin } from '@capacitor/core';
 
-const EnvironmentalSound = registerPlugin('EnvironmentalSound');
 const VoiceSettings = registerPlugin('VoiceSettings');
-
-const SOUND_TYPES = [
-    ['doorbell', 'Kapı zili', DoorOpen], ['alarm', 'Yangın/duman alarmı', Flame],
-    ['baby', 'Bebek ağlaması', HeartPulse], ['horn', 'Araç kornası', AlertTriangle],
-    ['phone', 'Telefon zili', Phone], ['dog', 'Köpek havlaması', BellRing]
-];
 
 const MODE_CONFIG = {
     general: {
@@ -248,195 +240,6 @@ const translateText = async (text, targetLang, sourceLang = 'auto') => {
         return '';
     }
 };
-
-const normalizeSensitiveName = value => String(value || '')
-    .toLocaleLowerCase('tr-TR')
-    .replace(/\u0131/g, 'i').replace(/\u015f/g, 's').replace(/\u011f/g, 'g')
-    .replace(/\u00fc/g, 'u').replace(/\u00f6/g, 'o').replace(/\u00e7/g, 'c')
-    .replace(/[^a-z0-9]/g, '');
-
-const nameEditDistance = (left, right) => {
-    const row = Array.from({ length: right.length + 1 }, (_, index) => index);
-    for (let i = 1; i <= left.length; i += 1) {
-        let previous = row[0]; row[0] = i;
-        for (let j = 1; j <= right.length; j += 1) {
-            const old = row[j];
-            row[j] = Math.min(row[j] + 1, row[j - 1] + 1, previous + (left[i - 1] === right[j - 1] ? 0 : 1));
-            previous = old;
-        }
-    }
-    return row[right.length];
-};
-
-const containsSensitiveTurkishName = (transcript, name) => {
-    const target = normalizeSensitiveName(name);
-    if (!target) return false;
-    const words = String(transcript || '').split(/\s+/);
-    return words.some((word, index) => {
-        const candidate = normalizeSensitiveName(word);
-        if (candidate === target) return true;
-        if (target.length >= 4 && Math.abs(candidate.length - target.length) <= 1 && nameEditDistance(candidate, target) <= 1) return true;
-        const pair = normalizeSensitiveName(`${word}${words[index + 1] || ''}`);
-        return target.length >= 5 && nameEditDistance(pair, target) <= 1;
-    });
-};
-
-function EnvironmentMonitor({ onBack }) {
-    const [settings, setSettings] = useState(() => loadJson('eary_environment_settings', { enabled: [], customLabel: '', nameEnabled: false, nameKeyword: '', vibration: true, screenFlash: true, watch: true }));
-    const [nameDraft, setNameDraft] = useState(() => loadJson('eary_environment_settings', {}).nameKeyword || '');
-    const [nameSaved, setNameSaved] = useState(false);
-    const [customProfiles, setCustomProfiles] = useState(() => loadJson('eary_custom_sounds', []));
-    const [customDraft, setCustomDraft] = useState('');
-    const [trainingId, setTrainingId] = useState(null);
-    const [monitoring, setMonitoring] = useState(false);
-    const [status, setStatus] = useState('Kapalı');
-    const [events, setEvents] = useState(() => loadJson('eary_environment_events', []));
-    const [flash, setFlash] = useState(false);
-    const streamRef = useRef(null);
-    const audioContextRef = useRef(null);
-    const intervalRef = useRef(null);
-    const recognitionRef = useRef(null);
-    const lastAlertRef = useRef(0);
-
-    useEffect(() => { localStorage.setItem('eary_environment_settings', JSON.stringify(settings)); }, [settings]);
-    useEffect(() => { localStorage.setItem('eary_custom_sounds', JSON.stringify(customProfiles)); }, [customProfiles]);
-    useEffect(() => {
-        if (Capacitor.isNativePlatform()) {
-            EnvironmentalSound.status().then(result => {
-                if (result.active) {
-                    setMonitoring(true);
-                    setStatus('Seçilen sesler ekran kilitliyken de cihazda izleniyor');
-                }
-            }).catch(console.error);
-        }
-        return () => {
-            if (!Capacitor.isNativePlatform()) stopMonitoring();
-        };
-    }, []);
-
-    const alertUser = async (type, label, confidence) => {
-        if (Date.now() - lastAlertRef.current < 7000) return;
-        lastAlertRef.current = Date.now();
-        const item = { id: Date.now(), type, label, confidence, timestamp: Date.now() };
-        setEvents(current => {
-            const next = [item, ...current].slice(0, 30);
-            localStorage.setItem('eary_environment_events', JSON.stringify(next));
-            return next;
-        });
-        if (settings.vibration && navigator.vibrate) navigator.vibrate(type === 'alarm' ? [500, 150, 500, 150, 700] : [250, 120, 250]);
-        if (settings.screenFlash) { setFlash(true); setTimeout(() => setFlash(false), 1400); }
-        if (settings.watch) await scheduleNotification('Eary Ses Uyarısı', `${label} · Güven %${Math.round(confidence * 100)}`);
-    };
-
-    const stopMonitoring = () => {
-        if (Capacitor.isNativePlatform()) EnvironmentalSound.stop().catch(console.error);
-        clearInterval(intervalRef.current);
-        recognitionRef.current?.abort?.();
-        streamRef.current?.getTracks?.().forEach(track => track.stop());
-        audioContextRef.current?.close?.();
-        intervalRef.current = null; recognitionRef.current = null; streamRef.current = null; audioContextRef.current = null;
-        setMonitoring(false); setStatus('Kapalı');
-    };
-
-    const startMonitoring = async () => {
-        const enabledCustom = customProfiles.filter(profile => profile.enabled && profile.samples > 0);
-        if (!settings.enabled.length && !enabledCustom.length && !(settings.nameEnabled && settings.nameKeyword.trim())) { setStatus('En az bir ses veya isim seçin'); return; }
-        try {
-            await requestNotificationPermission();
-            if (Capacitor.isNativePlatform() && (settings.enabled.length || enabledCustom.length)) {
-                const enabled = [...settings.enabled, ...enabledCustom.map(profile => `custom:${profile.id}`)];
-                await EnvironmentalSound.start({ enabled: enabled.join(',') });
-                setMonitoring(true);
-                setStatus('Seçilen sesler ekran kilitliyken de cihazda izleniyor');
-                return;
-            }
-            const stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false } });
-            streamRef.current = stream;
-            const AudioContextClass = window.AudioContext || window.webkitAudioContext;
-            const context = new AudioContextClass();
-            await context.resume();
-            audioContextRef.current = context;
-            const analyser = context.createAnalyser(); analyser.fftSize = 1024;
-            context.createMediaStreamSource(stream).connect(analyser);
-            const bins = new Uint8Array(analyser.frequencyBinCount);
-            let loudFrames = 0; let tonalFrames = 0; let noiseFloor = 8;
-            intervalRef.current = setInterval(() => {
-                analyser.getByteFrequencyData(bins);
-                const average = bins.reduce((sum, value) => sum + value, 0) / bins.length;
-                const high = bins.slice(Math.floor(bins.length * 0.45)).reduce((sum, value) => sum + value, 0) / Math.ceil(bins.length * 0.55);
-                const low = bins.slice(0, Math.floor(bins.length * 0.2)).reduce((sum, value) => sum + value, 0) / Math.floor(bins.length * 0.2);
-                if (average < noiseFloor + 7) noiseFloor = (noiseFloor * 0.96) + (average * 0.04);
-                const isLoud = average > Math.max(16, noiseFloor + 9);
-                loudFrames = isLoud ? loudFrames + 1 : Math.max(0, loudFrames - 1);
-                tonalFrames = high > average * 1.22 ? tonalFrames + 1 : Math.max(0, tonalFrames - 1);
-                if (loudFrames >= 5 && tonalFrames >= 4 && settings.enabled.includes('alarm')) { alertUser('alarm', 'Alarm benzeri yüksek öncelikli ses', 0.72); loudFrames = 0; tonalFrames = 0; }
-                else if (loudFrames >= 4 && low > high * 1.35 && settings.enabled.includes('horn')) { alertUser('horn', 'Korna benzeri güçlü ses', 0.64); loudFrames = 0; }
-                else if (loudFrames >= 3 && tonalFrames >= 2 && (settings.enabled.includes('doorbell') || settings.enabled.includes('phone'))) { alertUser('bell', 'Zil benzeri ses', 0.58); loudFrames = 0; tonalFrames = 0; }
-                else if (loudFrames >= 6 && high > low * 1.08 && settings.enabled.includes('baby')) { alertUser('baby', 'Bebek ağlamasına benzeyen ses', 0.52); loudFrames = 0; }
-                else if (loudFrames >= 3 && low > average * 1.12 && settings.enabled.includes('dog')) { alertUser('dog', 'Havlamaya benzeyen kısa ses', 0.49); loudFrames = 0; }
-                else if (loudFrames >= 5 && settings.enabled.includes('custom')) { alertUser('custom', `${settings.customLabel.trim() || 'Özel'} sese benzeyen güçlü ses`, 0.42); loudFrames = 0; }
-            }, 240);
-
-            if (settings.nameEnabled && settings.nameKeyword.trim()) {
-                const recognizer = getDuoSpeechRecognizer('tr-TR', (finalText, interimText) => {
-                    if (containsSensitiveTurkishName(`${finalText || ''} ${interimText || ''}`, settings.nameKeyword)) alertUser('name', `Birisi “${settings.nameKeyword.trim()}” dedi`, 0.85);
-                }, () => {}, error => setStatus(`İsim algılama kullanılamadı: ${String(error?.message || error)}`));
-                recognitionRef.current = recognizer;
-                Promise.resolve(recognizer?.start?.()).catch(error => {
-                    setStatus(`Çevresel sesler dinleniyor · isim algılama kullanılamadı: ${String(error?.message || error)}`);
-                });
-            }
-            setMonitoring(true);
-            setStatus(settings.nameEnabled ? 'Çevresel sesler ve isminiz dinleniyor' : 'Çevresel sesler dinleniyor');
-        } catch (error) { setStatus(error.message || 'Mikrofon açılamadı'); stopMonitoring(); }
-    };
-
-    const toggleSound = id => setSettings(current => ({ ...current, enabled: current.enabled.includes(id) ? current.enabled.filter(item => item !== id) : [...current.enabled, id] }));
-    const saveName = () => {
-        const nameKeyword = nameDraft.trim();
-        setSettings(current => ({ ...current, nameKeyword }));
-        setNameSaved(true);
-        setTimeout(() => setNameSaved(false), 1800);
-    };
-
-    const addCustomProfile = () => {
-        const label = customDraft.trim();
-        if (!label || customProfiles.length >= 10) return;
-        setCustomProfiles(current => [...current, { id: `${Date.now()}`, label, samples: 0, enabled: true }]);
-        setCustomDraft('');
-    };
-    const trainCustomProfile = async profile => {
-        if (!Capacitor.isNativePlatform()) { setStatus('Ozel ses ogretme Android uygulamasinda kullanilir'); return; }
-        stopMonitoring();
-        setTrainingId(profile.id);
-        setStatus(`${profile.label} icin sesi 4-5 saniye calin`);
-        try {
-            await EnvironmentalSound.train({ profileId: profile.id, label: profile.label });
-            setTimeout(() => {
-                const timer = setInterval(async () => {
-                    const result = await EnvironmentalSound.status();
-                    setStatus(result.trainingMessage || 'Ses ornegi isleniyor');
-                    if (!result.training) {
-                        clearInterval(timer);
-                        setTrainingId(null);
-                        if (String(result.trainingMessage).includes('kaydedildi')) {
-                            setCustomProfiles(current => current.map(item => item.id === profile.id ? { ...item, samples: item.samples + 1 } : item));
-                        }
-                    }
-                }, 700);
-            }, 900);
-        } catch (error) {
-            setTrainingId(null);
-            setStatus(error.message || 'Ses ornegi baslatilamadi');
-        }
-    };
-    const removeCustomProfile = profile => {
-        EnvironmentalSound.removeProfile({ profileId: profile.id }).catch(() => {});
-        setCustomProfiles(current => current.filter(item => item.id !== profile.id));
-    };
-
-    return <main className="eary-shell relative mx-auto flex h-screen w-full max-w-md flex-col overflow-hidden sm:h-[800px] sm:rounded-xl sm:border sm:eary-line">{flash && <div className="pointer-events-none absolute inset-0 z-50 animate-pulse border-[18px] border-amber-400 bg-amber-200/35" />}<header className="eary-ios-safe-header flex items-center gap-3 border-b eary-line px-4 pb-3"><button type="button" onClick={onBack} className="eary-soft eary-muted flex h-10 w-10 items-center justify-center rounded-lg"><ArrowLeft size={20} /></button><div><h1 className="font-bold">Çevresel Ses Uyarıları</h1><p className="eary-muted text-[10px]">Yalnız siz açtığınızda mikrofon kullanılır</p></div></header><div className="flex-1 overflow-y-auto pb-6"><section className="px-4 py-4"><div className={`rounded-lg border px-4 py-3 ${monitoring ? 'border-emerald-300 bg-emerald-50 text-emerald-800' : 'eary-line eary-soft'}`}><div className="flex items-center gap-3"><span className={`h-3 w-3 rounded-full ${monitoring ? 'animate-pulse bg-emerald-500' : 'bg-slate-400'}`} /><div className="flex-1"><p className="text-sm font-bold">{monitoring ? 'Aktif' : 'Kapalı'}</p><p className="text-[10px] opacity-75">{status}</p></div><button type="button" onClick={monitoring ? stopMonitoring : startMonitoring} className={`rounded-lg px-4 py-2 text-xs font-bold ${monitoring ? 'bg-rose-100 text-rose-700' : 'eary-brand-bg'}`}>{monitoring ? 'Durdur' : 'Başlat'}</button></div></div></section><p className="eary-muted px-4 pb-2 text-[10px] font-bold uppercase">İzlenecek sesler</p><section className="grid grid-cols-2 gap-2 px-4">{SOUND_TYPES.map(([id,label,Icon]) => <button key={id} type="button" onClick={() => toggleSound(id)} className={`flex min-h-20 items-center gap-3 rounded-lg border p-3 text-left ${settings.enabled.includes(id) ? 'border-[var(--brand)] eary-brand-soft' : 'eary-line eary-shell'}`}><Icon size={20} /><span className="text-xs font-semibold">{label}</span>{settings.enabled.includes(id) && <Check size={14} className="ml-auto" />}</button>)}</section><section className="mt-5 border-y eary-line px-4 py-4"><div className="mb-3 flex items-center justify-between"><div><h2 className="text-sm font-bold">Özel seslerim</h2><p className="eary-muted text-[10px]">Fırın, çamaşır makinesi veya size özel bir sesi öğretin</p></div><span className="eary-muted text-[10px]">{customProfiles.length}/10</span></div><div className="flex gap-2"><input value={customDraft} onChange={event=>setCustomDraft(event.target.value)} onKeyDown={event=>event.key==='Enter'&&addCustomProfile()} placeholder="Örn. Fırın zamanlayıcısı" className="eary-input min-w-0 flex-1 rounded-lg border px-3 py-2 text-xs"/><button type="button" onClick={addCustomProfile} disabled={!customDraft.trim()||customProfiles.length>=10} className="eary-brand-bg flex h-9 w-9 items-center justify-center rounded-lg disabled:opacity-40" title="Özel ses ekle"><Plus size={17}/></button></div>{customProfiles.length>0&&<div className="mt-3 space-y-2">{customProfiles.map(profile=><div key={profile.id} className="eary-soft flex items-center gap-2 rounded-lg border eary-line p-2.5"><input type="checkbox" checked={profile.enabled} disabled={!profile.samples} onChange={event=>setCustomProfiles(current=>current.map(item=>item.id===profile.id?{...item,enabled:event.target.checked}:item))} className="h-4 w-4 accent-[var(--brand)]"/><div className="min-w-0 flex-1"><p className="truncate text-xs font-semibold">{profile.label}</p><p className="eary-muted text-[9px]">{profile.samples?profile.samples+' örnek öğretildi':'Henüz örnek yok'}{profile.samples<3?' · En az 3 önerilir':''}</p></div><button type="button" onClick={()=>trainCustomProfile(profile)} disabled={trainingId!==null} className="eary-brand-soft rounded-md px-2.5 py-2 text-[9px] font-bold disabled:opacity-40">{trainingId===profile.id?'Dinliyor...':profile.samples?'Tekrar öğret':'Öğret'}</button><button type="button" onClick={()=>removeCustomProfile(profile)} className="eary-muted flex h-8 w-8 items-center justify-center rounded-md" title="Özel sesi sil"><Trash2 size={14}/></button></div>)}</div>}</section><section className="mt-5 border-y eary-line px-4 py-4"><label className="flex items-center gap-3"><input type="checkbox" checked={settings.nameEnabled} onChange={event => setSettings(current => ({...current,nameEnabled:event.target.checked}))} className="h-4 w-4 accent-[var(--brand)]" /><span className="text-sm font-semibold">İsmim söylendiğinde uyar</span></label>{settings.nameEnabled && <div className="mt-3 flex gap-2"><input value={nameDraft} onChange={event => {setNameDraft(event.target.value);setNameSaved(false);}} className="eary-input min-w-0 flex-1 rounded-lg border px-3 py-2.5 text-sm" placeholder="Örn. Aslı" /><button type="button" onClick={saveName} disabled={!nameDraft.trim()} className="eary-brand-bg flex h-10 w-10 shrink-0 items-center justify-center rounded-lg disabled:opacity-40" title="İsmi kaydet"><Check size={18}/></button></div>}{nameSaved&&<p className="mt-2 text-[10px] font-semibold text-emerald-600">İsim kaydedildi</p>}</section><p className="eary-muted px-4 pb-2 pt-5 text-[10px] font-bold uppercase">Uyarı biçimi</p><section className="px-4">{[['vibration','Güçlü titreşim'],['screenFlash','Ekran ışığı'],['watch','Telefon ve akıllı saat bildirimi']].map(([key,label]) => <label key={key} className="flex items-center gap-3 border-b eary-line py-3"><input type="checkbox" checked={settings[key]} onChange={event => setSettings(current => ({...current,[key]:event.target.checked}))} className="h-4 w-4 accent-[var(--brand)]" /><span className="text-sm">{label}</span></label>)}</section>{events.length > 0 && <section className="mt-5 px-4"><div className="mb-2 flex items-center justify-between"><h2 className="text-sm font-bold">Son uyarılar</h2><button type="button" onClick={() => {setEvents([]);localStorage.removeItem('eary_environment_events');}} className="text-[10px] font-semibold text-rose-600">Temizle</button></div>{events.slice(0,6).map(event => <div key={event.id} className="flex items-center gap-3 border-b eary-line py-2.5"><BellRing size={17} className="eary-brand" /><div className="flex-1"><p className="text-xs font-semibold">{event.label}</p><p className="eary-muted text-[10px]">{new Date(event.timestamp).toLocaleTimeString('tr-TR')} · Güven %{Math.round(event.confidence*100)}</p></div></div>)}</section>}<div className="mx-4 mt-5 rounded-lg border border-amber-200 bg-amber-50 p-3 text-[10px] leading-4 text-amber-900">Bu özellik yardımcı bir erken uyarıdır; sertifikalı yangın, güvenlik veya bebek izleme cihazlarının yerine geçmez. Ham ses kaydedilmez veya sunucuya gönderilmez.</div></div></main>;
-}
 
 function AmbientListeningTool({ onBack }) {
     const [captions, setCaptions] = useState([]);
@@ -1193,7 +996,6 @@ export default function AccessibilityHub({ account, onOpenChats, onOpenSettings 
         window.addEventListener('eary:back', handleBack);
         return () => window.removeEventListener('eary:back', handleBack);
     }, [showContacts, view]);
-    if (view==='environment') return <EnvironmentMonitor onBack={()=>setView('home')}/>;
     if (view==='ambient') return <AmbientListeningTool onBack={()=>setView('home')}/>;
     if (view==='notebook') return <VoiceNotebook onBack={()=>setView('home')}/>;
     if (view==='emergency') return <EmergencyCard nickname={account?.nickname} onBack={()=>setView('home')}/>;
