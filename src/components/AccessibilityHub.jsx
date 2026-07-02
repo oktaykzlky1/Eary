@@ -724,7 +724,7 @@ function VoiceNotebook({ onBack }) {
     const [interim, setInterim] = useState('');
     const [listening, setListening] = useState(false);
     const [saved, setSaved] = useState(false);
-    const [language, setLanguage] = useState(() => localStorage.getItem('eary_notebook_language') || getInitialAppLanguage());
+    const [language] = useState(() => localStorage.getItem('eary_notebook_language') || getInitialAppLanguage());
     const [targetLang, setTargetLang] = useState(() => localStorage.getItem('eary_notebook_target_lang') || 'tr-TR');
     const [showTranslationTools, setShowTranslationTools] = useState(false);
     const [translation, setTranslation] = useState('');
@@ -875,7 +875,7 @@ function VoiceNotebook({ onBack }) {
     };
 
     return (
-        <main className="eary-shell mx-auto flex h-screen w-full max-w-md flex-col overflow-hidden sm:h-[800px] sm:rounded-xl sm:border sm:eary-line">
+        <main className="eary-shell relative mx-auto flex h-screen w-full max-w-md flex-col overflow-hidden sm:h-[800px] sm:rounded-xl sm:border sm:eary-line">
             <header className="eary-ios-safe-header flex items-center gap-3 border-b eary-line px-4 pb-3">
                 <button type="button" onClick={onBack} className="eary-soft eary-muted flex h-10 w-10 items-center justify-center rounded-lg" aria-label="Geri dön"><ArrowLeft size={20} /></button>
                 <span className="eary-brand-bg flex h-10 w-10 items-center justify-center rounded-lg"><FileText size={20} /></span>
@@ -887,28 +887,10 @@ function VoiceNotebook({ onBack }) {
             </header>
 
             <section className="border-b eary-line px-4 py-3">
-                <label className="block text-[10px] font-black uppercase eary-muted">Konuşma dili
-                    <select value={language} onChange={event => setLanguage(event.target.value)} disabled={listening} className="eary-input mt-1 w-full rounded-lg border px-2 py-2 text-xs font-bold normal-case disabled:opacity-60">
-                        {SUPPORTED_LANGUAGES.map(item => <option key={item.code} value={item.code}>{item.nativeLabel}</option>)}
-                    </select>
-                </label>
-            </section>
-
-            <section className="flex-1 overflow-y-auto px-4 py-4">
-                <textarea
-                    ref={noteTextareaRef}
-                    value={noteText}
-                    onChange={handleNoteChange}
-                    onScroll={handleNoteScroll}
-                    placeholder="Konuşarak veya yazarak not alın..."
-                    className="eary-input min-h-[55vh] w-full resize-none rounded-lg border p-4 text-[17px] font-semibold leading-8"
-                    aria-label="Not metni"
-                />
-                {interim && <p className="eary-muted mt-2 text-xs font-semibold">{interim}</p>}
-                <div className="mt-3 flex flex-wrap justify-end gap-2">
-                    <button type="button" onClick={translateNote} disabled={!noteText.trim() || translating} className="eary-soft eary-brand flex items-center gap-1.5 rounded-lg px-3 py-2 text-[11px] font-bold disabled:opacity-30"><Languages size={14}/>{translating ? 'Çevriliyor' : 'Çevir'}</button>
-                    <button type="button" onClick={saveNote} disabled={!noteText.trim()} className="eary-soft eary-brand flex items-center gap-1.5 rounded-lg px-3 py-2 text-[11px] font-bold disabled:opacity-30"><Save size={14}/>Kaydet</button>
-                    <button type="button" onClick={clearNote} disabled={!noteText.trim() && !interim} className="eary-soft eary-muted flex items-center gap-1.5 rounded-lg px-3 py-2 text-[11px] font-bold disabled:opacity-30"><Trash2 size={14}/>Temizle</button>
+                <div className="flex flex-wrap items-center justify-end gap-2">
+                    <button type="button" onClick={translateNote} disabled={!noteText.trim() || translating} className="eary-soft eary-brand flex min-h-10 items-center gap-1.5 rounded-lg px-3 py-2 text-[12px] font-bold disabled:opacity-30"><Languages size={15}/>{translating ? 'Çevriliyor' : 'Çevir'}</button>
+                    <button type="button" onClick={saveNote} disabled={!noteText.trim()} className="eary-soft eary-brand flex min-h-10 items-center gap-1.5 rounded-lg px-3 py-2 text-[12px] font-bold disabled:opacity-30"><Save size={15}/>Kaydet</button>
+                    <button type="button" onClick={clearNote} disabled={!noteText.trim() && !interim} className="eary-soft eary-muted flex min-h-10 items-center gap-1.5 rounded-lg px-3 py-2 text-[12px] font-bold disabled:opacity-30"><Trash2 size={15}/>Temizle</button>
                 </div>
                 {showTranslationTools && (
                     <div className="mt-3 flex items-end gap-2 rounded-lg border eary-line p-3">
@@ -921,18 +903,23 @@ function VoiceNotebook({ onBack }) {
                         <button type="button" onClick={() => { setShowTranslationTools(false); setTranslation(''); }} className="eary-soft eary-muted flex h-9 w-9 items-center justify-center rounded-lg" title="Çeviriyi kapat"><X size={15}/></button>
                     </div>
                 )}
-                {translation && <article className="mt-3 rounded-lg border border-emerald-200 bg-emerald-50 p-3 text-sm font-semibold leading-6 text-emerald-950 whitespace-pre-line">{translation}</article>}
             </section>
 
-            <footer className="border-t eary-line bg-[var(--surface)] px-4 py-3 pb-[max(12px,env(safe-area-inset-bottom))]">
-                <div className="flex items-center justify-between gap-3">
-                    <div className="min-w-0">
-                        <p className="text-xs font-bold">{listening ? 'Mikrofon açık' : 'Mikrofon kapalı'}</p>
-                        <p className="eary-muted truncate text-[10px]">{getLanguageLabel(language)} · {countWords(noteText)} kelime</p>
-                    </div>
-                    <button type="button" onClick={toggleListening} className={`flex h-14 w-14 shrink-0 items-center justify-center rounded-full text-white shadow-lg ${listening ? 'bg-rose-600' : 'eary-brand-bg'}`} aria-label={listening ? 'Not diktesini durdur' : 'Not diktesini başlat'}>{listening ? <StopCircle size={26}/> : <Mic size={26}/>}</button>
-                </div>
-            </footer>
+            <section className="flex min-h-0 flex-1 flex-col overflow-hidden px-4 py-4 pb-24">
+                <textarea
+                    ref={noteTextareaRef}
+                    value={noteText}
+                    onChange={handleNoteChange}
+                    onScroll={handleNoteScroll}
+                    placeholder="Konuşarak veya yazarak not alın..."
+                    className="min-h-0 flex-1 w-full resize-none border-0 bg-transparent px-1 py-2 text-[19px] font-semibold leading-9 text-[var(--text)] outline-none placeholder:text-slate-400"
+                    aria-label="Not metni"
+                />
+                {interim && <p className="eary-muted mt-2 text-xs font-semibold">{interim}</p>}
+                {translation && <article className="mt-3 max-h-32 overflow-y-auto rounded-lg border border-emerald-200 bg-emerald-50 p-3 text-sm font-semibold leading-6 text-emerald-950 whitespace-pre-line">{translation}</article>}
+            </section>
+
+            <button type="button" onClick={toggleListening} className={`absolute bottom-[max(18px,env(safe-area-inset-bottom))] right-5 flex h-16 w-16 shrink-0 items-center justify-center rounded-full text-white shadow-xl ${listening ? 'bg-rose-600' : 'eary-brand-bg'}`} aria-label={listening ? 'Not diktesini durdur' : 'Not diktesini başlat'}>{listening ? <StopCircle size={28}/> : <Mic size={28}/>}</button>
         </main>
     );
 }
