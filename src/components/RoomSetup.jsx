@@ -3,7 +3,7 @@ import { History, MessageSquare, Shield, User, Lock, Key, Trash2, Menu } from 'l
 import {
     db, auth, ref, set, get, getRest, updateRest, remove, onValue, update, query, limitToLast,
     createUserWithEmailAndPassword, signInWithEmailAndPassword, sendEmailVerification,
-    signInWithPhoneNumber, RecaptchaVerifier
+    signInWithPhoneNumber, RecaptchaVerifier, signOut
 } from '../firebase';
 import Sidebar from './Sidebar';
 import ChatHome from './ChatHome';
@@ -843,6 +843,7 @@ export default function RoomSetup({ onJoin, language, onLanguageChange, theme, o
     };
 
     const handleLogout = () => {
+        signOut(auth).catch(error => console.warn('Firebase sign out failed:', error));
         setAccount(null);
         setNickname('');
         localStorage.removeItem('duotalk_account');
@@ -866,7 +867,10 @@ export default function RoomSetup({ onJoin, language, onLanguageChange, theme, o
                     preference: updatedAcc.profile.preference,
                     languages: updatedAcc.profile.languages,
                     interests: updatedAcc.profile.interests,
-                    privacy: updatedAcc.profile.privacy || defaultPrivacy
+                    privacy: updatedAcc.profile.privacy || defaultPrivacy,
+                    contactMethod: updatedAcc.profile.contactMethod || 'legacy',
+                    contactHint: updatedAcc.profile.contactHint || '',
+                    contactVerified: Boolean(updatedAcc.profile.contactVerified)
                 });
                 await update(ref(db, `publicProfiles/${updatedAcc.username}`), {
                     username: updatedAcc.username,

@@ -3,7 +3,7 @@ import { getDatabase, ref, set, onValue, onDisconnect, push, remove, get, update
 import { getStorage, ref as storageRef, uploadBytes, uploadBytesResumable, getDownloadURL } from "firebase/storage";
 import {
   getAuth, createUserWithEmailAndPassword, signInWithEmailAndPassword,
-  sendEmailVerification, signInWithPhoneNumber, RecaptchaVerifier, signOut
+  sendEmailVerification, sendPasswordResetEmail, signInWithPhoneNumber, RecaptchaVerifier, signOut
 } from "firebase/auth";
 
 const firebaseConfig = {
@@ -75,4 +75,4 @@ export const updateRest = async updates => {
 // Helper database references and functions
 export { ref, set, onValue, onDisconnect, push, remove, get, update, query, limitToLast, orderByKey };
 export { storageRef, uploadBytes, uploadBytesResumable, getDownloadURL };
-export { createUserWithEmailAndPassword, signInWithEmailAndPassword, sendEmailVerification, signInWithPhoneNumber, RecaptchaVerifier, signOut };
+export { createUserWithEmailAndPassword, signInWithEmailAndPassword, sendEmailVerification, sendPasswordResetEmail, signInWithPhoneNumber, RecaptchaVerifier, signOut };

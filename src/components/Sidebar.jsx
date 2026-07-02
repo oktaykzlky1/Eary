@@ -4,9 +4,11 @@ import {
     X, ArrowLeft, UserRound, CircleHelp, Bell, Languages, Database, Shield, Smartphone, KeyRound, Lock,
     Type, Moon, Sun, LogOut, LogIn, ChevronRight, Mic2, ShieldCheck, Trash2, Download, Archive,
     MessageCircle, Check, Camera, Eye, EyeOff, LockKeyhole, AtSign,
-    Phone, UsersRound, Image, Clock3, CheckCheck, MessageCircleQuestion, Copy, Accessibility, HardDrive
+    Phone, UsersRound, Image, Clock3, CheckCheck, MessageCircleQuestion, Copy, Accessibility, HardDrive,
+    MailCheck, AlertTriangle
 } from 'lucide-react';
 import { SUPPORTED_LANGUAGES, getLanguageLabel } from '../utils/language';
+import { auth, sendEmailVerification, sendPasswordResetEmail } from '../firebase';
 
 const VoiceSettings = registerPlugin('VoiceSettings');
 
@@ -26,16 +28,27 @@ function Toggle({ checked, onChange, label }) {
 }
 
 function SettingRow({ icon: Icon, title, description, action, onClick, danger = false, disabled = false }) {
+    const interactive = Boolean(onClick) && !disabled && !action;
+    const Component = interactive ? 'button' : 'div';
     return (
-        <div onClick={disabled || action ? undefined : onClick} className={`eary-row flex w-full items-center gap-3 border-b eary-line px-4 py-3.5 text-left last:border-b-0 ${disabled ? 'opacity-50' : ''}`}>
+        <Component type={interactive ? 'button' : undefined} onClick={interactive ? onClick : undefined} className={`eary-row flex w-full items-center gap-3 border-b eary-line px-4 py-3.5 text-left last:border-b-0 ${disabled ? 'opacity-50' : ''}`}>
             <span className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-lg ${danger ? 'bg-rose-50 text-rose-600' : 'eary-brand-soft'}`}><Icon size={18} /></span>
             <span className="min-w-0 flex-1">
                 <span className={`block text-sm font-semibold ${danger ? 'text-rose-600' : ''}`}>{title}</span>
                 {description && <span className="eary-muted mt-0.5 block text-[11px] leading-4">{description}</span>}
             </span>
             {action || (!disabled && <ChevronRight size={17} className="eary-muted" />)}
-        </div>
+        </Component>
     );
+}
+
+function AccountNotice({ type = 'info', children }) {
+    const styles = type === 'error'
+        ? 'border-rose-200 bg-rose-50 text-rose-800'
+        : type === 'success'
+            ? 'border-emerald-200 bg-emerald-50 text-emerald-800'
+            : 'border-[var(--line)] eary-soft eary-muted';
+    return <div className={`mx-4 my-3 rounded-lg border px-3 py-2.5 text-xs font-semibold leading-5 ${styles}`}>{children}</div>;
 }
 
 function SectionTitle({ children, description }) {
@@ -72,6 +85,9 @@ export default function Sidebar({
     const [mediaAutoDownload, setMediaAutoDownload] = useState(() => localStorage.getItem('eary_media_auto_download') !== 'false');
     const [saveMediaToGallery, setSaveMediaToGallery] = useState(() => localStorage.getItem('eary_save_media_gallery') === 'true');
     const [backupChats, setBackupChats] = useState(() => localStorage.getItem('eary_chat_backup') === 'true');
+    const [accountBusy, setAccountBusy] = useState('');
+    const [accountNotice, setAccountNotice] = useState(null);
+    const [confirmLogoutOpen, setConfirmLogoutOpen] = useState(false);
     const profilePhotoInputRef = useRef(null);
     const privacy = account?.profile?.privacy || {};
 
@@ -163,6 +179,66 @@ export default function Sidebar({
         await navigator.clipboard.writeText(`${window.location.origin}${window.location.pathname}?invite=${account.username}`);
         setInviteCopied(true);
         setTimeout(() => setInviteCopied(false), 1800);
+    };
+
+    const getCurrentEmailUser = () => {
+        const user = auth.currentUser;
+        if (!user?.email) return null;
+        return user;
+    };
+
+    const showAccountNotice = (type, text) => {
+        setAccountNotice({ type, text });
+        window.dispatchEvent(new CustomEvent('eary:toast', { detail: text }));
+    };
+
+    const handleSendVerificationEmail = async () => {
+        const user = getCurrentEmailUser();
+        if (!user) {
+            showAccountNotice('info', 'Bu hesap e-posta ile bağlı değil. Doğrulama için önce e-posta hesabıyla giriş gerekir.');
+            return;
+        }
+        setAccountBusy('verify');
+        try {
+            await user.reload?.();
+            if (user.emailVerified) {
+                const updated = { ...account, profile: { ...account.profile, contactVerified: true } };
+                onUpdateAccount?.(updated);
+                showAccountNotice('success', 'E-posta adresiniz zaten doğrulanmış.');
+                return;
+            }
+            await sendEmailVerification(user);
+            showAccountNotice('success', 'Doğrulama bağlantısı e-posta adresinize gönderildi.');
+        } catch (error) {
+            console.error('Email verification failed:', error);
+            showAccountNotice('error', 'Doğrulama e-postası gönderilemedi. Biraz sonra tekrar deneyin.');
+        } finally {
+            setAccountBusy('');
+        }
+    };
+
+    const handlePasswordReset = async () => {
+        const user = getCurrentEmailUser();
+        if (!user) {
+            showAccountNotice('info', 'Şifre sıfırlama sadece e-posta ile bağlı hesaplarda otomatik yapılabilir.');
+            return;
+        }
+        setAccountBusy('password');
+        try {
+            await sendPasswordResetEmail(auth, user.email);
+            showAccountNotice('success', 'Şifre yenileme bağlantısı e-posta adresinize gönderildi.');
+        } catch (error) {
+            console.error('Password reset failed:', error);
+            showAccountNotice('error', 'Şifre yenileme bağlantısı gönderilemedi. İnternet bağlantısını kontrol edip tekrar deneyin.');
+        } finally {
+            setAccountBusy('');
+        }
+    };
+
+    const confirmLogout = () => {
+        setConfirmLogoutOpen(false);
+        onLogout?.();
+        onClose();
     };
 
     const menuItems = [
@@ -269,12 +345,23 @@ export default function Sidebar({
                         <div className="py-2">
                             <SectionTitle description="Hesap erişimi, doğrulama ve çıkış işlemleri.">Hesap</SectionTitle>
                             {account ? <>
-                                <SettingRow icon={AtSign} title="Kullanıcı adı" description={`@${account.username}`} disabled />
-                                <SettingRow icon={ShieldCheck} title={account.profile?.contactVerified ? 'İletişim doğrulandı' : 'İletişim doğrulaması'} description={account.profile?.contactHint || 'E-posta veya telefon doğrulaması eklenebilir'} disabled />
-                                <SettingRow icon={KeyRound} title="Şifre değiştir" description="Hesap güvenliği için şifre yenileme" disabled />
-                                <SettingRow icon={Lock} title="İki adımlı doğrulama" description="Ek güvenlik katmanı" disabled />
-                                <SettingRow icon={LogOut} title="Hesaptan çık" description="Bu cihazdaki oturumu kapat" onClick={() => { onLogout?.(); onClose(); }} />
-                                <SettingRow icon={Trash2} title="Hesabı sil" description="Kalıcı silme işlemi için destek akışı eklenecek" danger disabled />
+                                {accountNotice && <AccountNotice type={accountNotice.type}>{accountNotice.text}</AccountNotice>}
+                                <SettingRow icon={AtSign} title="Kullanıcı adı" description={`@${account.username} · Aramalarda görünen kimlik`} disabled />
+                                <SettingRow
+                                    icon={account.profile?.contactVerified ? ShieldCheck : MailCheck}
+                                    title={account.profile?.contactVerified ? 'İletişim doğrulandı' : 'E-posta doğrulaması'}
+                                    description={accountBusy === 'verify' ? 'Doğrulama hazırlanıyor...' : (account.profile?.contactHint || auth.currentUser?.email || 'E-posta bağlı değil')}
+                                    onClick={handleSendVerificationEmail}
+                                />
+                                <SettingRow
+                                    icon={KeyRound}
+                                    title="Şifre yenile"
+                                    description={accountBusy === 'password' ? 'Bağlantı gönderiliyor...' : 'E-posta ile güvenli şifre sıfırlama bağlantısı gönder'}
+                                    onClick={handlePasswordReset}
+                                />
+                                <SettingRow icon={Lock} title="İki adımlı doğrulama" description="Firebase/cihaz doğrulama stratejisi seçilince eklenecek" disabled />
+                                <SettingRow icon={LogOut} title="Hesaptan çık" description="Bu cihazdaki oturumu kapat" onClick={() => setConfirmLogoutOpen(true)} />
+                                <SettingRow icon={Trash2} title="Hesabı sil" description="Kalıcı silme için yeniden kimlik doğrulama ve veri silme backend akışı gerekir" danger disabled />
                             </> : <div className="p-4"><button type="button" onClick={() => { onClose(); onAuthClick?.(); }} className="eary-brand-bg flex w-full items-center justify-center gap-2 rounded-lg py-3 text-sm font-bold"><LogIn size={17} /> Giriş yap veya kayıt ol</button></div>}
                         </div>
                     )}
@@ -377,9 +464,25 @@ export default function Sidebar({
                 </div>
 
                 <footer className="border-t eary-line p-3">
-                    {account && <button type="button" onClick={() => { onLogout?.(); onClose(); }} className="flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-semibold text-rose-600 hover:bg-rose-50"><LogOut size={18} /> Hesaptan çık</button>}
                     <p className="eary-muted px-3 pt-2 text-[10px]">Eary 2.0</p>
                 </footer>
+                {confirmLogoutOpen && (
+                    <div className="absolute inset-0 z-20 flex items-end bg-black/35 p-3">
+                        <div className="eary-shell w-full rounded-xl border eary-line p-4 shadow-2xl">
+                            <div className="mb-3 flex items-start gap-3">
+                                <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-rose-50 text-rose-600"><AlertTriangle size={19} /></span>
+                                <div>
+                                    <h4 className="text-sm font-bold">Bu cihazdan çıkış yapılsın mı?</h4>
+                                    <p className="eary-muted mt-1 text-xs leading-5">Sohbetlere tekrar erişmek için yeniden giriş yapmanız gerekir.</p>
+                                </div>
+                            </div>
+                            <div className="grid grid-cols-2 gap-2">
+                                <button type="button" onClick={() => setConfirmLogoutOpen(false)} className="eary-soft rounded-lg py-3 text-sm font-bold">Vazgeç</button>
+                                <button type="button" onClick={confirmLogout} className="rounded-lg bg-rose-600 py-3 text-sm font-bold text-white">Çıkış yap</button>
+                            </div>
+                        </div>
+                    </div>
+                )}
             </aside>
         </div>
     );
