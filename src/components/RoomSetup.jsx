@@ -67,7 +67,7 @@ export default function RoomSetup({ onJoin, language, onLanguageChange, theme, o
     const [roomId, setRoomId] = useState('');
     const [roomPin, setRoomPin] = useState('');
     const [nickname, setNickname] = useState('');
-    const [role, setRole] = useState('intercom');
+    const [role] = useState('intercom');
     const [roomType, setRoomType] = useState('intercom_only')
     const [actionTab, setActionTab] = useState('join'); // 'join' or 'create'
     const [history, setHistory] = useState([]);
@@ -516,11 +516,29 @@ export default function RoomSetup({ onJoin, language, onLanguageChange, theme, o
             onJoin(botHistoryItem);
             return;
         }
+        const cleanRoomId = item.roomId.trim().toLowerCase().replace(/[^a-z0-9-_]/g, '');
+        const pinToUse = item.roomPin || '';
+        const activeNickname = account ? account.nickname : (item.nickname || nickname || 'Guest');
+        const optimisticHistoryItem = {
+            ...item,
+            roomId: cleanRoomId,
+            roomPin: pinToUse,
+            nickname: activeNickname,
+            role: item.role || 'intercom',
+            roomType: item.roomType || 'intercom_only',
+            timestamp: item.timestamp || item.createdAt || Date.now()
+        };
+        const optimisticHistory = [
+            optimisticHistoryItem,
+            ...history.filter(h => h.roomId !== cleanRoomId)
+        ].slice(0, 100);
+
+        setHistory(optimisticHistory);
+        localStorage.setItem('duotalk_history', JSON.stringify(optimisticHistory));
+        onJoin(optimisticHistoryItem);
+
         try {
-            const cleanRoomId = item.roomId.trim().toLowerCase().replace(/[^a-z0-9-_]/g, '');
             const roomData = await getRest(`rooms/${cleanRoomId}`);
-            
-            const pinToUse = item.roomPin || '';
             let detectedRoomType = item.roomType || 'intercom_only';
 
             if (!roomData) {
@@ -532,18 +550,12 @@ export default function RoomSetup({ onJoin, language, onLanguageChange, theme, o
             } else {
                 const protectedKind = roomData.metadata?.kind;
                 if ((protectedKind === 'direct' || protectedKind === 'group') && (!account?.username || !roomData.members?.[account.username])) {
-                    setError('Bu sohbet yalnızca davet edilen üyelere açıktır.');
+                    window.dispatchEvent(new CustomEvent('eary:toast', { detail: 'Bu sohbet yalnızca davet edilen üyelere açıktır.' }));
                     return;
                 }
                 const dbPin = roomData.pin;
                 if (dbPin && dbPin !== pinToUse) {
-                    setError("Oda şifresi değişmiş. Lütfen yeni şifreyle tekrar bağlanın.");
-                    setRoomId(item.roomId);
-                    setRoomPin('');
-                    setNickname(item.nickname || nickname);
-                    setRole(item.role || 'intercom');
-                    setRoomType(item.roomType || 'intercom_only');
-                    setShowNewRoomForm(true);
+                    window.dispatchEvent(new CustomEvent('eary:toast', { detail: 'Oda şifresi değişmiş. Lütfen yeni şifreyle tekrar bağlanın.' }));
                     return;
                 }
                 const dbType = roomData.type;
@@ -552,16 +564,10 @@ export default function RoomSetup({ onJoin, language, onLanguageChange, theme, o
                 }
             }
 
-            const activeNickname = account ? account.nickname : (item.nickname || nickname || 'Guest');
-
             const newHistoryItem = {
-                ...item,
-                roomId: cleanRoomId,
-                roomPin: pinToUse,
-                nickname: activeNickname,
-                role: item.role || 'intercom',
+                ...optimisticHistoryItem,
                 roomType: detectedRoomType,
-                timestamp: item.timestamp || item.createdAt || Date.now()
+                timestamp: optimisticHistoryItem.timestamp
             };
 
             const updatedHistory = [
@@ -576,16 +582,9 @@ export default function RoomSetup({ onJoin, language, onLanguageChange, theme, o
                 updateRest({ [`users/${account.username}/history/${cleanRoomId}`]: newHistoryItem })
                     .catch(e => console.error("Cloud history write error:", e));
             }
-
-            onJoin({
-                roomId: cleanRoomId,
-                roomPin: pinToUse,
-                nickname: activeNickname,
-                role: item.role || 'intercom',
-                roomType: detectedRoomType
-            });
         } catch (err) {
-            setError("Bağlantı Hatası: " + err.message);
+            console.error("Background room validation failed:", err);
+            window.dispatchEvent(new CustomEvent('eary:toast', { detail: 'Sohbet açıldı; bağlantı doğrulaması arka planda tekrar denenecek.' }));
         }
     };
 

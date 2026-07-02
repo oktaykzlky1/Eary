@@ -70,11 +70,76 @@ const isImportantListeningText = (text, contextConfig) => {
 
 const summarizeListeningLines = lines => {
     if (!lines.length) return 'Henüz özetlenecek konuşma yok.';
-    const important = lines.filter(line => line.important);
-    const source = (important.length ? important : lines).slice(-6);
-    const sentences = source.map(line => line.text.replace(/[.!?]+$/, '').trim()).filter(Boolean);
-    if (!sentences.length) return 'Konuşma metni henüz yeterince net değil.';
-    return sentences.slice(0, 4).join('. ') + '.';
+    return buildListeningSummary(lines);
+};
+
+const SUMMARY_FILLERS = [
+    'yani', 'hani', 'şey', 'şimdi', 'aslında', 'böyle', 'biraz', 'tamam', 'evet', 'ıı', 'eee'
+];
+
+const splitListeningSentences = lines => lines
+    .flatMap(line => String(line.text || '').split(/(?<=[.!?])\s+|[\n\r]+/).map(sentence => ({ sentence, line })))
+    .map(({ sentence, line }) => ({
+        text: sentence
+            .replace(/\s+/g, ' ')
+            .replace(new RegExp(`\\b(${SUMMARY_FILLERS.join('|')})\\b`, 'giu'), '')
+            .replace(/\s+/g, ' ')
+            .replace(/\s+([.,!?])/g, '$1')
+            .trim(),
+        line
+    }))
+    .filter(item => item.text.length > 8);
+
+const sentenceSummaryScore = (text, line, index, total) => {
+    const lower = text.toLocaleLowerCase('tr-TR');
+    const hasNumber = /\d/.test(text);
+    const hasAction = /(gerekiyor|gerekir|yapın|yapmanız|hazırlayın|gönderin|getirin|unutmayın|kontrol|teslim|randevu|ödeme|karar|son gün|zorunlu)/i.test(lower);
+    const hasTime = /(bugün|yarın|haftaya|saat|tarih|pazartesi|salı|çarşamba|perşembe|cuma|cumartesi|pazar)/i.test(lower);
+    const keywordScore = LISTENING_IMPORTANT_HINTS.reduce((score, keyword) => score + (lower.includes(keyword) ? 2 : 0), 0);
+    const lengthScore = text.length > 36 && text.length < 180 ? 1 : 0;
+    const recencyScore = total ? index / total : 0;
+    return keywordScore + (line.important ? 4 : 0) + (hasAction ? 3 : 0) + (hasTime ? 2 : 0) + (hasNumber ? 1 : 0) + lengthScore + recencyScore;
+};
+
+const compactSummarySentence = text => {
+    const clean = String(text || '').replace(/[.!?]+$/, '').trim();
+    const words = clean.split(/\s+/).filter(Boolean);
+    if (words.length <= 18) return clean;
+    return `${words.slice(0, 18).join(' ')}...`;
+};
+
+const buildListeningSummary = (lines, focusId = null) => {
+    if (!lines.length) return 'Henüz özetlenecek konuşma yok.';
+    const usableLines = focusId ? lines.filter(line => Number(line.id) <= Number(focusId)) : lines;
+    const sentenceItems = splitListeningSentences(usableLines);
+    if (!sentenceItems.length) return 'Konuşma metni henüz yeterince net değil.';
+
+    const focusIndex = focusId ? sentenceItems.findIndex(item => item.line.id === focusId) : -1;
+    const ranked = sentenceItems
+        .map((item, index) => ({
+            ...item,
+            index,
+            score: sentenceSummaryScore(item.text, item.line, index, sentenceItems.length) + (focusIndex >= 0 && Math.abs(index - focusIndex) <= 1 ? 2 : 0)
+        }))
+        .sort((a, b) => b.score - a.score || b.index - a.index);
+
+    const picked = [];
+    const seen = new Set();
+    ranked.forEach(item => {
+        const key = item.text.toLocaleLowerCase('tr-TR').replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
+        if (!key || seen.has(key)) return;
+        if (picked.some(existing => existing.key.includes(key) || key.includes(existing.key))) return;
+        seen.add(key);
+        picked.push({ key, text: compactSummarySentence(item.text), index: item.index });
+    });
+
+    const selected = picked
+        .slice(0, focusId ? 3 : 4)
+        .sort((a, b) => a.index - b.index)
+        .map(item => item.text);
+
+    if (!selected.length) return 'Bu bölümde özetlenecek belirgin bir nokta yakalanmadı.';
+    return selected.map(item => `• ${item}`).join('\n');
 };
 
 const loadJson = (key, fallback) => {
@@ -310,6 +375,7 @@ function AmbientListeningTool({ onBack }) {
     const [saved, setSaved] = useState(false);
     const [summaryOpen, setSummaryOpen] = useState(false);
     const [summaryText, setSummaryText] = useState('');
+    const [lineSummaries, setLineSummaries] = useState({});
     const [contextId, setContextId] = useState(() => localStorage.getItem('eary_ambient_context') || 'general');
     const [language, setLanguage] = useState(() => localStorage.getItem('eary_ambient_language') || getInitialAppLanguage());
     const recognizerRef = useRef(null);
@@ -323,6 +389,11 @@ function AmbientListeningTool({ onBack }) {
         ...group,
         lines: captions.filter(line => group.keywords.some(keyword => line.text.toLocaleLowerCase('tr-TR').includes(keyword)))
     }));
+    const runAfterUiPaint = callback => {
+        requestAnimationFrame(() => {
+            setTimeout(callback, 30);
+        });
+    };
 
     useEffect(() => () => {
         desiredListeningRef.current = false;
@@ -408,9 +479,17 @@ function AmbientListeningTool({ onBack }) {
 
     const stopListening = () => {
         desiredListeningRef.current = false;
-        recognizerRef.current?.stop?.();
         commitInterimCaption();
         setListening(false);
+        const recognizer = recognizerRef.current;
+        runAfterUiPaint(() => {
+            try {
+                if (typeof recognizer?.abort === 'function') recognizer.abort();
+                else recognizer?.stop?.();
+            } catch (error) {
+                console.warn('Ambient speech recognition could not be stopped:', error);
+            }
+        });
     };
 
     const toggleListening = () => {
@@ -419,8 +498,15 @@ function AmbientListeningTool({ onBack }) {
     };
 
     const refreshSummary = () => {
-        setSummaryText(summarizeListeningLines(captions));
+        setSummaryText(buildListeningSummary(captions));
         setSummaryOpen(true);
+    };
+
+    const summarizeLine = id => {
+        setLineSummaries(current => ({
+            ...current,
+            [id]: buildListeningSummary(captions, id)
+        }));
     };
 
     const saveSession = () => {
@@ -515,7 +601,16 @@ function AmbientListeningTool({ onBack }) {
                                     </span>
                                 </div>
                                 <p className={`text-[15px] font-semibold leading-7 ${line.uncertain ? 'decoration-rose-500 decoration-wavy underline' : ''}`}>{renderHighlighted(line.text)}</p>
-                                {line.rawText && line.rawText !== line.text && <p className="eary-muted mt-2 text-[9px]">Düzeltilmiş metin · Ham: {line.rawText}</p>}
+                                {lineSummaries[line.id] && (
+                                    <div className="mt-3 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs font-semibold leading-5 text-emerald-950 whitespace-pre-line">
+                                        {lineSummaries[line.id]}
+                                    </div>
+                                )}
+                                <div className="mt-2 flex justify-end">
+                                    <button type="button" onClick={() => summarizeLine(line.id)} className="eary-soft eary-brand flex items-center gap-1 rounded-md px-2.5 py-1.5 text-[10px] font-bold" title="Bu bölüme kadar özetle">
+                                        <Sparkles size={12}/> Özetle
+                                    </button>
+                                </div>
                             </article>
                         ))}
                         {interim && <div className="rounded-lg border border-dashed eary-line p-3 text-sm italic eary-muted">{interim}</div>}

@@ -1,4 +1,4 @@
-import { useState, useEffect, useLayoutEffect, useRef } from 'react';
+import { useState, useEffect, useLayoutEffect, useRef, useCallback } from 'react';
 import { db, auth, storage, ref, set, push, get, getRest, updateRest, remove, onValue, onDisconnect, update, query, limitToLast, storageRef, uploadBytesResumable, getDownloadURL } from '../firebase';
 import { getDuoSpeechRecognizer, rememberNativeSpeechTranscript } from '../utils/speech';
 import { correctTranscription } from '../utils/autocorrect';
@@ -148,6 +148,7 @@ export default function IntercomInterface({ roomData, onLeave, language = 'tr-TR
         try { return JSON.parse(localStorage.getItem(`eary_hidden_${roomData.roomId}`) || '[]'); } catch { return []; }
     });
     const [showScrollToBottom, setShowScrollToBottom] = useState(false);
+    const [isChatViewportReady, setIsChatViewportReady] = useState(false);
     const scrollHintTimerRef = useRef(null);
     const scrollDragRef = useRef({ active: false, moved: false, y: 0, scrollTop: 0 });
     const galleryInputRef = useRef(null);
@@ -1023,6 +1024,7 @@ export default function IntercomInterface({ roomData, onLeave, language = 'tr-TR
     const suppressNextClickRef = useRef(false);
     const shouldAutoScrollRef = useRef(true);
     const faceMicPressLockRef = useRef({ side: '', timestamp: 0 });
+    const programmaticScrollTimerRef = useRef(null);
 
     const cancelLongPress = () => {
         if (longPressTimeout.current) {
@@ -1261,23 +1263,39 @@ export default function IntercomInterface({ roomData, onLeave, language = 'tr-TR
         };
     }, [isTestBotRoom, roomId, nickname, text.newMessage, messageLimit, speechLang, currentDeviceId, currentUsername, alwaysNotify, account?.profile?.privacy?.readReceipts]);
 
+    const setProgrammaticScroll = useCallback(() => {
+        if (programmaticScrollTimerRef.current) clearTimeout(programmaticScrollTimerRef.current);
+        programmaticScrollTimerRef.current = setTimeout(() => {
+            programmaticScrollTimerRef.current = null;
+        }, 260);
+    }, []);
+
+    const pinChatToBottom = useCallback(() => {
+        const container = chatContainerRef.current;
+        if (!container) return;
+        setProgrammaticScroll();
+        container.scrollTop = Math.max(0, container.scrollHeight - container.clientHeight);
+    }, [setProgrammaticScroll]);
+
+    useEffect(() => {
+        shouldAutoScrollRef.current = true;
+        setIsChatViewportReady(false);
+        setShowScrollToBottom(false);
+        pinChatToBottom();
+        const frame = requestAnimationFrame(() => {
+            pinChatToBottom();
+            setIsChatViewportReady(true);
+        });
+        return () => cancelAnimationFrame(frame);
+    }, [pinChatToBottom, roomId]);
+
     // Scroll to bottom on new message
     useEffect(() => {
         if (!isSelectMode && shouldAutoScrollRef.current && messages.length > 0) {
-            const scrollSingle = () => {
-                if (chatContainerRef.current) {
-                    chatContainerRef.current.scrollTop = chatContainerRef.current.scrollHeight - chatContainerRef.current.clientHeight;
-                }
-            };
-
-            if (!isReadyForSmoothScroll.current) {
-                scrollSingle();
-            } else {
-                scrollSingle();
-            }
-            const frame = requestAnimationFrame(scrollSingle);
-            const settleTimer = setTimeout(scrollSingle, 180);
-            const lateTimer = setTimeout(scrollSingle, 520);
+            pinChatToBottom();
+            const frame = requestAnimationFrame(pinChatToBottom);
+            const settleTimer = setTimeout(pinChatToBottom, 180);
+            const lateTimer = setTimeout(pinChatToBottom, 520);
             return () => {
                 cancelAnimationFrame(frame);
                 clearTimeout(settleTimer);
@@ -1285,28 +1303,33 @@ export default function IntercomInterface({ roomData, onLeave, language = 'tr-TR
             };
         }
         return undefined;
-    }, [messages, isSelectMode]);
+    }, [messages, isSelectMode, pinChatToBottom]);
 
     // Translations increase bubble height after messages arrive. Keep the last
     // message anchored before paint so opening a translated chat never jumps.
     useLayoutEffect(() => {
-        if (splitScreenEnabled || isSelectMode || !shouldAutoScrollRef.current || !messages.length) return;
-        const container = chatContainerRef.current;
-        if (!container) return;
-        container.scrollTop = container.scrollHeight - container.clientHeight;
+        if (splitScreenEnabled || isSelectMode || !shouldAutoScrollRef.current || !messages.length) {
+            if (!messages.length) setIsChatViewportReady(true);
+            return;
+        }
+        pinChatToBottom();
+        setIsChatViewportReady(true);
         const frame = requestAnimationFrame(() => {
-            if (chatContainerRef.current) chatContainerRef.current.scrollTop = chatContainerRef.current.scrollHeight - chatContainerRef.current.clientHeight;
+            pinChatToBottom();
+            setIsChatViewportReady(true);
         });
         const settleTimer = setTimeout(() => {
-            if (chatContainerRef.current) chatContainerRef.current.scrollTop = chatContainerRef.current.scrollHeight - chatContainerRef.current.clientHeight;
+            pinChatToBottom();
+            setIsChatViewportReady(true);
         }, 220);
         return () => {
             cancelAnimationFrame(frame);
             clearTimeout(settleTimer);
         };
-    }, [roomId, messages.length, translations, autoTranslate, splitScreenEnabled, isSelectMode]);
+    }, [roomId, messages.length, translations, autoTranslate, splitScreenEnabled, isSelectMode, pinChatToBottom]);
 
     const handleChatScroll = () => {
+        if (programmaticScrollTimerRef.current) return;
         const container = chatContainerRef.current;
         if (!container) return;
         const distanceFromBottom = container.scrollHeight - container.scrollTop - container.clientHeight;
@@ -1377,6 +1400,9 @@ export default function IntercomInterface({ roomData, onLeave, language = 'tr-TR
         if (scrollHintTimerRef.current) {
             clearTimeout(scrollHintTimerRef.current);
         }
+        if (programmaticScrollTimerRef.current) {
+            clearTimeout(programmaticScrollTimerRef.current);
+        }
     }, []);
 
     // Ref to hold the last captured text from speech recognition (used for native finalize)
@@ -1426,6 +1452,12 @@ export default function IntercomInterface({ roomData, onLeave, language = 'tr-TR
         clearSpeechPreview();
     };
 
+    const runAfterUiPaint = callback => {
+        requestAnimationFrame(() => {
+            setTimeout(callback, 30);
+        });
+    };
+
     const closeSpeechCaptureAfterSend = async () => {
         ignoreSpeechResultsRef.current = true;
         speechClosingRef.current = true;
@@ -1441,19 +1473,20 @@ export default function IntercomInterface({ roomData, onLeave, language = 'tr-TR
             recognitionRef.current = null;
         }
 
-        try {
-            if (recognizer && typeof recognizer.abort === 'function') {
-                await recognizer.abort();
-            } else if (recognizer && typeof recognizer.stop === 'function') {
-                await recognizer.stop();
+        runAfterUiPaint(() => {
+            try {
+                if (recognizer && typeof recognizer.abort === 'function') {
+                    recognizer.abort();
+                } else if (recognizer && typeof recognizer.stop === 'function') {
+                    recognizer.stop();
+                }
+            } catch (error) {
+                console.warn('Speech recognition could not be closed after send:', error);
             }
-        } catch (error) {
-            console.warn('Speech recognition could not be closed after send:', error);
-        } finally {
-            resetSpeechCapture();
-            speechClosingRef.current = false;
-            speechStartInFlightRef.current = false;
-        }
+        });
+        resetSpeechCapture();
+        speechClosingRef.current = false;
+        speechStartInFlightRef.current = false;
     };
 
     const normalizeSpeechWords = value => String(value || '')
@@ -1679,10 +1712,16 @@ export default function IntercomInterface({ roomData, onLeave, language = 'tr-TR
         return value.trim();
     };
 
-    const cleanSpeechCandidate = (value, owner) => stripPreviousSpeakerPrefix(
-        stripSentSpeechSnapshot(value, owner),
-        owner
-    );
+    const cleanSpeechCandidate = (value, owner) => {
+        const clean = String(value || '').trim();
+        if (!clean) return '';
+        const faceState = faceStateRef.current;
+        if (!faceState.splitScreenEnabled || !faceState.faceSessionActive) return clean;
+        return stripPreviousSpeakerPrefix(
+            stripSentSpeechSnapshot(clean, owner),
+            owner
+        );
+    };
 
     const isLikelyDuplicateFaceSpeech = (value, owner) => {
         const faceState = faceStateRef.current;
@@ -1729,7 +1768,7 @@ export default function IntercomInterface({ roomData, onLeave, language = 'tr-TR
         lastCapturedTextRef.current = '';
         finalizedSpeechRef.current = '';
         await closeSpeechCaptureAfterSend();
-        await sendMessageToCloud(pendingText, true, lang, { speechOwner });
+        sendMessageToCloud(pendingText, true, lang, { speechOwner });
     };
 
     const showSpeechFallback = () => {
@@ -1905,22 +1944,27 @@ export default function IntercomInterface({ roomData, onLeave, language = 'tr-TR
             setIsListening(false);
             stopActiveStream();
             playBeep('stop');
-            try {
-                if (pendingBeforeStop) {
-                    lastCapturedTextRef.current = pendingBeforeStop;
-                    await sendCapturedSpeechText(pendingBeforeStop, actualLang);
-                    return;
+
+            runAfterUiPaint(async () => {
+                try {
+                    if (pendingBeforeStop) {
+                        lastCapturedTextRef.current = pendingBeforeStop;
+                        await sendCapturedSpeechText(pendingBeforeStop, actualLang);
+                        return;
+                    }
+                    if (typeof rec.abort === 'function') rec.abort();
+                    else await rec.stop();
+                    resetSpeechCapture();
+                } catch (error) {
+                    console.error("Speech recognition could not be stopped:", error);
+                } finally {
+                    if (!speechClosingRef.current) {
+                        speechStartInFlightRef.current = false;
+                    }
+                    stopActiveStream();
                 }
-                await rec.stop();
-                resetSpeechCapture();
-            } catch (error) {
-                console.error("Speech recognition could not be stopped:", error);
-            } finally {
-                if (!speechClosingRef.current) {
-                    speechStartInFlightRef.current = false;
-                }
-            }
-            stopActiveStream();
+            });
+            return;
         } else {
             speechStartInFlightRef.current = true;
             setIsSpeechStarting(true);
@@ -1931,15 +1975,15 @@ export default function IntercomInterface({ roomData, onLeave, language = 'tr-TR
             speechSessionBaselinesRef.current = buildSpeechSessionBaselines(speechOwnerRef.current);
             resetSpeechSessionBuffers();
             const shouldResetRecognizerBeforeStart = Capacitor.isNativePlatform() || (splitScreenEnabled && faceSessionActive);
+            setSpeechPreview('Mikrofon hazırlanıyor...');
             if (shouldResetRecognizerBeforeStart) {
                 try {
-                    await recognitionRef.current?.abort?.();
+                    recognitionRef.current?.abort?.();
                 } catch (error) {
                     console.warn('Speech recognition could not be reset before capture:', error);
                 }
                 recognitionRef.current = null;
             }
-            setSpeechPreview('Mikrofon hazırlanıyor...');
             try {
                 const freshRec = getOrInitRecognizer(actualLang, sessionToken);
                 if (!freshRec) {
@@ -3088,10 +3132,10 @@ export default function IntercomInterface({ roomData, onLeave, language = 'tr-TR
                 onPointerUp={stopChatPointerDrag}
                 onPointerCancel={stopChatPointerDrag}
                 onPointerLeave={stopChatPointerDrag}
-                className="eary-soft min-h-0 flex-1 touch-pan-y overflow-y-auto overscroll-contain scroll-smooth px-3 py-3"
+                className="eary-soft min-h-0 flex-1 touch-pan-y overflow-y-auto overscroll-contain px-3 py-3"
                 style={{ WebkitOverflowScrolling: 'touch', touchAction: 'pan-y' }}
             >
-                <div className="flex min-h-full flex-col justify-end gap-3">
+                <div className={`flex min-h-full flex-col justify-end gap-3 ${isChatViewportReady ? 'opacity-100' : 'opacity-0'}`}>
                     {messages.length >= messageLimit && (
                         <div className="flex justify-center pb-1">
                             <button type="button" onClick={() => setMessageLimit(limit => limit + 60)} className="eary-shell eary-muted rounded-full border eary-line px-4 py-1.5 text-[10px] font-semibold shadow-sm">Daha eski mesajları yükle</button>
