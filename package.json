@@ -6,6 +6,8 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
+    "admin:dev": "vite --config admin/vite.config.js",
+    "admin:build": "vite build --config admin/vite.config.js",
     "lint": "eslint .",
     "preview": "vite preview"
   },

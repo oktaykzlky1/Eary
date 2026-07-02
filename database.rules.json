@@ -40,6 +40,16 @@
         ".write": "auth != null"
       }
     },
+    "adminUsers": {
+      "$uid": {
+        ".read": "auth != null && auth.uid === $uid",
+        ".write": false
+      }
+    },
+    "adminTasks": {
+      ".read": false,
+      ".write": false
+    },
     "contacts": {
       "$username": {
         "$otherUsername": {
