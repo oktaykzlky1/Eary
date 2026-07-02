@@ -1,6 +1,7 @@
 import { initializeApp } from "firebase/app";
 import { getDatabase, ref, set, onValue, onDisconnect, push, remove, get, update, query, limitToLast, orderByKey } from "firebase/database";
 import { getStorage, ref as storageRef, uploadBytes, uploadBytesResumable, getDownloadURL } from "firebase/storage";
+import { getFunctions, httpsCallable } from "firebase/functions";
 import {
   getAuth, createUserWithEmailAndPassword, signInWithEmailAndPassword,
   sendEmailVerification, sendPasswordResetEmail, signInWithPhoneNumber, RecaptchaVerifier, signOut
@@ -24,6 +25,8 @@ const app = initializeApp(firebaseConfig);
 export const db = getDatabase(app);
 export const storage = getStorage(app);
 export const auth = getAuth(app);
+export const functions = getFunctions(app, 'us-central1');
+export const requestAccountDeletion = httpsCallable(functions, 'requestAccountDeletion');
 
 const encodeDatabasePath = path => path
   .split('/')

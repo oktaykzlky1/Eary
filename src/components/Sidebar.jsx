@@ -5,10 +5,10 @@ import {
     Type, Moon, Sun, LogOut, LogIn, ChevronRight, Mic2, ShieldCheck, Trash2, Download, Archive,
     MessageCircle, Check, Camera, Eye, EyeOff, LockKeyhole, AtSign,
     Phone, UsersRound, Image, Clock3, CheckCheck, MessageCircleQuestion, Copy, Accessibility, HardDrive,
-    MailCheck, AlertTriangle
+    MailCheck, AlertTriangle, FileText, LifeBuoy, WifiOff
 } from 'lucide-react';
 import { SUPPORTED_LANGUAGES, getLanguageLabel } from '../utils/language';
-import { auth, sendEmailVerification, sendPasswordResetEmail } from '../firebase';
+import { auth, requestAccountDeletion, sendEmailVerification, sendPasswordResetEmail } from '../firebase';
 
 const VoiceSettings = registerPlugin('VoiceSettings');
 
@@ -37,7 +37,7 @@ function SettingRow({ icon: Icon, title, description, action, onClick, danger = 
                 <span className={`block text-sm font-semibold ${danger ? 'text-rose-600' : ''}`}>{title}</span>
                 {description && <span className="eary-muted mt-0.5 block text-[11px] leading-4">{description}</span>}
             </span>
-            {action || (!disabled && <ChevronRight size={17} className="eary-muted" />)}
+            {action || (interactive && <ChevronRight size={17} className="eary-muted" />)}
         </Component>
     );
 }
@@ -85,6 +85,13 @@ export default function Sidebar({
     const [mediaAutoDownload, setMediaAutoDownload] = useState(() => localStorage.getItem('eary_media_auto_download') !== 'false');
     const [saveMediaToGallery, setSaveMediaToGallery] = useState(() => localStorage.getItem('eary_save_media_gallery') === 'true');
     const [backupChats, setBackupChats] = useState(() => localStorage.getItem('eary_chat_backup') === 'true');
+    const [chatNotifications, setChatNotifications] = useState(() => localStorage.getItem('eary_chat_notifications') !== 'false');
+    const [notificationPreview, setNotificationPreview] = useState(() => localStorage.getItem('eary_notification_preview') !== 'false');
+    const [lowDataMode, setLowDataMode] = useState(() => localStorage.getItem('eary_low_data_mode') === 'true');
+    const [autoCleanup, setAutoCleanup] = useState(() => localStorage.getItem('eary_auto_cleanup') === 'true');
+    const [archiveQuiet, setArchiveQuiet] = useState(() => localStorage.getItem('eary_archive_quiet') === 'true');
+    const [storageNotice, setStorageNotice] = useState('');
+    const [supportCopied, setSupportCopied] = useState(false);
     const [accountBusy, setAccountBusy] = useState('');
     const [accountNotice, setAccountNotice] = useState(null);
     const [confirmLogoutOpen, setConfirmLogoutOpen] = useState(false);
@@ -109,6 +116,11 @@ export default function Sidebar({
     useEffect(() => localStorage.setItem('eary_media_auto_download', String(mediaAutoDownload)), [mediaAutoDownload]);
     useEffect(() => localStorage.setItem('eary_save_media_gallery', String(saveMediaToGallery)), [saveMediaToGallery]);
     useEffect(() => localStorage.setItem('eary_chat_backup', String(backupChats)), [backupChats]);
+    useEffect(() => localStorage.setItem('eary_chat_notifications', String(chatNotifications)), [chatNotifications]);
+    useEffect(() => localStorage.setItem('eary_notification_preview', String(notificationPreview)), [notificationPreview]);
+    useEffect(() => localStorage.setItem('eary_low_data_mode', String(lowDataMode)), [lowDataMode]);
+    useEffect(() => localStorage.setItem('eary_auto_cleanup', String(autoCleanup)), [autoCleanup]);
+    useEffect(() => localStorage.setItem('eary_archive_quiet', String(archiveQuiet)), [archiveQuiet]);
 
     if (!isOpen) return null;
 
@@ -241,6 +253,34 @@ export default function Sidebar({
         onClose();
     };
 
+    const handleDeleteAccountRequest = async () => {
+        if (!account?.username) return;
+        setAccountBusy('delete');
+        try {
+            await requestAccountDeletion({ username: account.username });
+            showAccountNotice('success', 'Hesap silme talebiniz güvenli inceleme kuyruğuna alındı.');
+        } catch (error) {
+            console.error('Account deletion request failed:', error);
+            showAccountNotice('error', 'Hesap silme talebi oluşturulamadı. E-posta ile giriş yaptıysanız tekrar deneyin.');
+        } finally {
+            setAccountBusy('');
+        }
+    };
+
+    const clearLocalCache = () => {
+        ['eary_caption_sessions', 'eary_environment_events', 'eary_voice_note_draft', 'eary_notebook_target_lang'].forEach(key => localStorage.removeItem(key));
+        setStorageNotice('Geçici not taslakları, canlı yazı kayıtları ve eski uyarı önbelleği temizlendi.');
+        window.dispatchEvent(new CustomEvent('eary:toast', { detail: 'Önbellek temizlendi' }));
+        setTimeout(() => setStorageNotice(''), 2600);
+    };
+
+    const copySupportAddress = async () => {
+        await navigator.clipboard.writeText('support@eary.app');
+        setSupportCopied(true);
+        window.dispatchEvent(new CustomEvent('eary:toast', { detail: 'Destek adresi kopyalandı' }));
+        setTimeout(() => setSupportCopied(false), 1800);
+    };
+
     const menuItems = [
         ['profile', UserRound, 'Profilim', account ? `@${account.username}` : 'Giriş yap veya kayıt ol'],
         ['account', KeyRound, 'Hesap', 'Güvenlik ve oturum'],
@@ -359,9 +399,9 @@ export default function Sidebar({
                                     description={accountBusy === 'password' ? 'Bağlantı gönderiliyor...' : 'E-posta ile güvenli şifre sıfırlama bağlantısı gönder'}
                                     onClick={handlePasswordReset}
                                 />
-                                <SettingRow icon={Lock} title="İki adımlı doğrulama" description="Firebase/cihaz doğrulama stratejisi seçilince eklenecek" disabled />
+                                <SettingRow icon={Lock} title="Uygulama kilidi" description="Eary açılırken cihaz kilidi isteme tercihi" action={<Toggle checked={appLock} onChange={() => setAppLock(value => !value)} label="Uygulama kilidi" />} />
                                 <SettingRow icon={LogOut} title="Hesaptan çık" description="Bu cihazdaki oturumu kapat" onClick={() => setConfirmLogoutOpen(true)} />
-                                <SettingRow icon={Trash2} title="Hesabı sil" description="Kalıcı silme için yeniden kimlik doğrulama ve veri silme backend akışı gerekir" danger disabled />
+                                <SettingRow icon={Trash2} title="Hesabı sil" description={accountBusy === 'delete' ? 'Talep oluşturuluyor...' : 'Kalıcı silme için güvenli inceleme talebi oluştur'} danger onClick={handleDeleteAccountRequest} />
                             </> : <div className="p-4"><button type="button" onClick={() => { onClose(); onAuthClick?.(); }} className="eary-brand-bg flex w-full items-center justify-center gap-2 rounded-lg py-3 text-sm font-bold"><LogIn size={17} /> Giriş yap veya kayıt ol</button></div>}
                         </div>
                     )}
@@ -395,8 +435,9 @@ export default function Sidebar({
                         <div className="py-2">
                             <SectionTitle description="Mesaj, grup ve erişim uyarılarının cihazda nasıl görüneceği.">Bildirimler</SectionTitle>
                             <SettingRow icon={Bell} title="Anlık mesaj bildirimleri" description="Yeni mesajları kilit ekranında göster" onClick={onToggleAlwaysNotify} action={<Toggle checked={alwaysNotify} onChange={onToggleAlwaysNotify} label="Bildirimler" />} />
-                            <SettingRow icon={MessageCircle} title="Sohbet bildirimleri" description="Bireysel ve grup mesajları için varsayılan bildirim" disabled />
-                            <SettingRow icon={Eye} title="Önizleme göster" description="Kilit ekranında mesaj metnini göster/gizle" disabled />
+                            <SettingRow icon={MessageCircle} title="Sohbet bildirimleri" description="Bireysel ve grup mesajları için varsayılan tercih" action={<Toggle checked={chatNotifications} onChange={() => setChatNotifications(value => !value)} label="Sohbet bildirimleri" />} />
+                            <SettingRow icon={Eye} title="Önizleme göster" description="Kilit ekranında mesaj metni görünsün" action={<Toggle checked={notificationPreview} onChange={() => setNotificationPreview(value => !value)} label="Mesaj önizlemesi" />} />
+                            <SettingRow icon={Mic2} title="Erişilebilirlik uyarıları" description="Mikrofon, kayıt ve canlı metin durumlarında görsel geri bildirim açık" />
                             {Capacitor.getPlatform() === 'android' && <SettingRow icon={ShieldCheck} title="Android bildirim izinleri" description="Sistem izinlerini ve kilit ekranını yönet" onClick={openNotificationSettings} />}
                         </div>
                     )}
@@ -404,10 +445,11 @@ export default function Sidebar({
                     {tab === 'chats' && (
                         <div className="py-2">
                             <SectionTitle description="Sohbet ekranı, medya davranışı ve konuşma geçmişi ayarları.">Sohbetler</SectionTitle>
-                            <SettingRow icon={MessageCircle} title="Chat ekranı" description="Mesaj balonları, cevaplama, tepki ve medya gönderimi aktif" disabled />
+                            <SettingRow icon={MessageCircle} title="Büyük mesaj yazısı" description={`${chatFontSize}px · Dil ve erişim bölümünden ayarlanır`} onClick={() => setTab('accessibility')} />
                             <SettingRow icon={Download} title="Medya otomatik indirme" description="Fotoğraf ve videoları otomatik indir" action={<Toggle checked={mediaAutoDownload} onChange={() => setMediaAutoDownload(value => !value)} label="Medya otomatik indirme" />} />
                             <SettingRow icon={Image} title="Galeriye kaydet" description="Gelen medyayı cihaz galerisine kaydet" action={<Toggle checked={saveMediaToGallery} onChange={() => setSaveMediaToGallery(value => !value)} label="Galeriye kaydet" />} />
-                            <SettingRow icon={Archive} title="Arşivlenen sohbetler" description="Arşiv ekranı sonraki sürümde eklenecek" disabled />
+                            <SettingRow icon={WifiOff} title="Düşük veri modu" description="Medya ve ağ kullanımını azalt" action={<Toggle checked={lowDataMode} onChange={() => setLowDataMode(value => !value)} label="Düşük veri modu" />} />
+                            <SettingRow icon={Archive} title="Arşiv davranışı" description="Sohbetleri sessiz ve listeden ayrı tutma tercihi" action={<Toggle checked={archiveQuiet} onChange={() => setArchiveQuiet(value => !value)} label="Arşiv sessiz" />} />
                             <SettingRow icon={CheckCheck} title="Okundu bilgisi" description="Ayar Gizlilik bölümünden yönetilir" onClick={() => setTab('privacy')} />
                         </div>
                     )}
@@ -415,19 +457,21 @@ export default function Sidebar({
                     {tab === 'data' && (
                         <div className="py-2">
                             <SectionTitle description="Önbellek, medya ve yedekleme alanı.">Depolama ve veri</SectionTitle>
-                            <SettingRow icon={HardDrive} title="Depolama kullanımı" description="Medya ve önbellek boyutu hesaplama eklenecek" disabled />
-                            <SettingRow icon={Trash2} title="Önbelleği temizle" description="Geçici yerel verileri temizler" onClick={() => { localStorage.removeItem('eary_caption_sessions'); localStorage.removeItem('eary_environment_events'); }} />
+                            {storageNotice && <AccountNotice type="success">{storageNotice}</AccountNotice>}
+                            <SettingRow icon={HardDrive} title="Yerel depolama" description="Not taslakları, ayarlar ve son oturum bilgileri bu cihazda tutulur" />
+                            <SettingRow icon={Trash2} title="Önbelleği temizle" description="Geçici yerel verileri temizler" onClick={clearLocalCache} />
                             <SettingRow icon={Database} title="Sohbet yedeği" description="Bu cihazda yerel yedekleme tercihi" action={<Toggle checked={backupChats} onChange={() => setBackupChats(value => !value)} label="Sohbet yedeği" />} />
-                            <SettingRow icon={Download} title="Veri kullanımı" description="Ağ kullanımı raporu sonraki sürümde eklenecek" disabled />
+                            <SettingRow icon={Clock3} title="Otomatik temizlik" description="Eski geçici kayıtları düzenli temizle" action={<Toggle checked={autoCleanup} onChange={() => setAutoCleanup(value => !value)} label="Otomatik temizlik" />} />
+                            <SettingRow icon={Download} title="Düşük veri modu" description="Sohbetlerde medya indirmeyi ve ağ kullanımını azalt" action={<Toggle checked={lowDataMode} onChange={() => setLowDataMode(value => !value)} label="Düşük veri modu" />} />
                         </div>
                     )}
 
                     {tab === 'devices' && (
                         <div className="py-2">
                             <SectionTitle description="Aktif cihazlar, uygulama kilidi ve güvenlik kontrolleri.">Cihazlar ve güvenlik</SectionTitle>
-                            <SettingRow icon={Smartphone} title="Bu cihaz" description={`${Capacitor.getPlatform()} cihazında aktif oturum`} disabled />
+                            <SettingRow icon={Smartphone} title="Bu cihaz" description={`${Capacitor.getPlatform()} cihazında aktif oturum`} onClick={() => window.dispatchEvent(new CustomEvent('eary:toast', { detail: 'Bu cihaz şu anda aktif' }))} />
                             <SettingRow icon={Lock} title="Uygulama kilidi" description="Eary açılırken cihaz kilidi isteme tercihi" action={<Toggle checked={appLock} onChange={() => setAppLock(value => !value)} label="Uygulama kilidi" />} />
-                            <SettingRow icon={KeyRound} title="Aktif oturumlar" description="Bağlı cihaz yönetimi sonraki sürümde eklenecek" disabled />
+                            <SettingRow icon={KeyRound} title="Aktif oturumlar" description="Çıkış yaparak bu cihazdaki oturumu güvenli kapat" onClick={() => setConfirmLogoutOpen(true)} />
                             <SettingRow icon={Shield} title="Güvenlik kontrolü" description="Dil, mikrofon, bildirim ve gizlilik ayarlarını gözden geçir" onClick={() => setTab('privacy')} />
                         </div>
                     )}
@@ -453,10 +497,21 @@ export default function Sidebar({
                     )}
 
                     {tab === 'help' && (
-                        <div className="space-y-6 p-5 text-sm leading-6">
-                            <section><div className="mb-2 flex items-center gap-2 font-bold"><MessageCircle size={18} className="eary-brand" /> Mesajlaşma</div><p className="eary-muted">Mesaja uzun basarak cevaplayabilir, iletebilir, düzenleyebilir, kopyalayabilir veya silebilirsiniz. Tek dokunuş tepki menüsünü açar.</p></section>
-                            <section><div className="mb-2 flex items-center gap-2 font-bold"><Mic2 size={18} className="eary-brand" /> Konuşmadan metne</div><p className="eary-muted">Mikrofon düğmesine basın, konuşun ve tekrar basarak kaydı tamamlayın. Metin odaya mesaj olarak gönderilir.</p></section>
-                            <section><div className="mb-2 flex items-center gap-2 font-bold"><ShieldCheck size={18} className="eary-brand" /> Gizlilik</div><p className="eary-muted">Oda PIN’inizi yalnızca güvendiğiniz kişilerle paylaşın. Medya ve mesajlar oda katılımcıları tarafından görüntülenebilir.</p></section>
+                        <div className="py-2">
+                            <SectionTitle description="Destek, sık sorulan sorular ve güven belgeleri.">Yardım ve destek</SectionTitle>
+                            <SettingRow icon={LifeBuoy} title="Bize ulaş" description={supportCopied ? 'Destek adresi kopyalandı' : 'support@eary.app adresini kopyala'} onClick={copySupportAddress} />
+                            <div className="border-b eary-line px-4 py-4">
+                                <div className="mb-3 flex items-center gap-2 font-bold"><CircleHelp size={18} className="eary-brand" /> Sık sorulan sorular</div>
+                                <div className="space-y-3 text-xs leading-5">
+                                    <p><strong>Mikrofon sürekli dinler mi?</strong><br/><span className="eary-muted">Hayır. Mikrofon yalnızca kullanıcı başlattığında çalışır ve durdurulduğunda UI hemen kapanır.</span></p>
+                                    <p><strong>Konuşmalarım herkese açık mı?</strong><br/><span className="eary-muted">Hayır. Profilinizde e-posta/telefon görünmez; sohbet erişimi oda ve kişi izinlerine bağlıdır.</span></p>
+                                    <p><strong>Notlar nerede tutulur?</strong><br/><span className="eary-muted">Not defteri taslakları ve ayarlar bu cihazda yerel olarak tutulur.</span></p>
+                                </div>
+                            </div>
+                            <div className="px-4 py-4">
+                                <div className="mb-3 flex items-center gap-2 font-bold"><FileText size={18} className="eary-brand" /> Gizlilik politikası</div>
+                                <p className="eary-muted text-xs leading-5">Eary; mikrofon, bildirim ve hesap verilerini kullanıcı kontrolünde işler. E-posta ve telefon bilgileri profilinizde gösterilmez. Hesap silme talepleri güvenli inceleme kuyruğuna alınır ve admin panelinden yönetilir.</p>
+                            </div>
                         </div>
                     )}
                         </div>
