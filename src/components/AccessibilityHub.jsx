@@ -726,10 +726,14 @@ function VoiceNotebook({ onBack }) {
     const [saved, setSaved] = useState(false);
     const [language, setLanguage] = useState(() => localStorage.getItem('eary_notebook_language') || getInitialAppLanguage());
     const [targetLang, setTargetLang] = useState(() => localStorage.getItem('eary_notebook_target_lang') || 'tr-TR');
+    const [showTranslationTools, setShowTranslationTools] = useState(false);
     const [translation, setTranslation] = useState('');
     const [translating, setTranslating] = useState(false);
+    const noteTextareaRef = useRef(null);
     const recognizerRef = useRef(null);
     const interimRef = useRef('');
+    const committedNoteRef = useRef(noteText.trim());
+    const autoScrollNoteRef = useRef(true);
     const sessionRef = useRef(0);
 
     useEffect(() => localStorage.setItem('eary_voice_note_draft', noteText), [noteText]);
@@ -737,21 +741,44 @@ function VoiceNotebook({ onBack }) {
     useEffect(() => localStorage.setItem('eary_notebook_target_lang', targetLang), [targetLang]);
     useEffect(() => () => recognizerRef.current?.abort?.(), []);
 
-    const appendToNote = rawText => {
+    const mergeNoteText = (base, draft) => [base.trim(), draft.trim()].filter(Boolean).join('\n\n');
+
+    const keepNoteAtEnd = () => {
+        requestAnimationFrame(() => {
+            const node = noteTextareaRef.current;
+            if (!node || !autoScrollNoteRef.current) return;
+            node.scrollTop = node.scrollHeight;
+            const end = node.value.length;
+            try { node.setSelectionRange(end, end); } catch { /* textarea may not be focusable yet */ }
+        });
+    };
+
+    const updateLiveDraft = rawText => {
         const clean = cleanListeningText(rawText, language);
         if (!clean) return;
-        setNoteText(current => [current.trim(), clean].filter(Boolean).join('\n\n'));
+        interimRef.current = clean;
+        setInterim('');
+        setNoteText(mergeNoteText(committedNoteRef.current, clean));
         setTranslation('');
+        keepNoteAtEnd();
+    };
+
+    const commitLiveDraft = () => {
+        const pending = interimRef.current.trim();
+        if (pending) {
+            committedNoteRef.current = mergeNoteText(committedNoteRef.current, pending);
+            setNoteText(committedNoteRef.current);
+        }
+        interimRef.current = '';
+        setInterim('');
+        keepNoteAtEnd();
     };
 
     const stopListening = () => {
         const recognizer = recognizerRef.current;
-        const pending = interimRef.current.trim();
         sessionRef.current += 1;
-        interimRef.current = '';
-        setInterim('');
         setListening(false);
-        if (pending) appendToNote(pending);
+        commitLiveDraft();
         requestAnimationFrame(() => {
             setTimeout(() => {
                 try {
@@ -767,26 +794,21 @@ function VoiceNotebook({ onBack }) {
     const startListening = async () => {
         const sessionId = sessionRef.current + 1;
         sessionRef.current = sessionId;
+        committedNoteRef.current = noteText.trim();
         interimRef.current = '';
         setInterim('');
         setListening(false);
         const recognizer = getDuoSpeechRecognizer(language, (finalText, interimText) => {
             if (sessionRef.current !== sessionId) return;
             const nextInterim = interimText ? cleanListeningText(interimText, language).replace(/[.!?]$/, '') : '';
-            interimRef.current = nextInterim;
-            setInterim(nextInterim);
+            if (nextInterim) updateLiveDraft(nextInterim);
             if (finalText?.trim()) {
-                appendToNote(finalText);
-                interimRef.current = '';
-                setInterim('');
+                updateLiveDraft(finalText);
             }
         }, () => {
             if (sessionRef.current !== sessionId) return;
             setListening(false);
-            const pending = interimRef.current.trim();
-            interimRef.current = '';
-            setInterim('');
-            if (pending) appendToNote(pending);
+            commitLiveDraft();
         }, error => {
             if (sessionRef.current !== sessionId) return;
             setListening(false);
@@ -811,6 +833,7 @@ function VoiceNotebook({ onBack }) {
 
     const saveNote = () => {
         if (!noteText.trim()) return;
+        committedNoteRef.current = noteText.trim();
         const notes = loadJson('eary_voice_notes', []);
         const item = { id: Date.now(), title: makeNoteTitle(noteText), text: noteText.trim(), language, createdAt: Date.now() };
         localStorage.setItem('eary_voice_notes', JSON.stringify([item, ...notes].slice(0, 50)));
@@ -819,6 +842,10 @@ function VoiceNotebook({ onBack }) {
     };
 
     const translateNote = async () => {
+        if (!showTranslationTools) {
+            setShowTranslationTools(true);
+            return;
+        }
         if (!noteText.trim()) return;
         setTranslating(true);
         const result = await translateText(noteText, targetLang, language);
@@ -828,9 +855,23 @@ function VoiceNotebook({ onBack }) {
 
     const clearNote = () => {
         setNoteText('');
+        committedNoteRef.current = '';
         setInterim('');
         setTranslation('');
+        setShowTranslationTools(false);
         localStorage.removeItem('eary_voice_note_draft');
+    };
+
+    const handleNoteScroll = event => {
+        const node = event.currentTarget;
+        autoScrollNoteRef.current = node.scrollHeight - node.scrollTop - node.clientHeight < 48;
+    };
+
+    const handleNoteChange = event => {
+        const next = event.target.value;
+        setNoteText(next);
+        if (!listening) committedNoteRef.current = next.trim();
+        setTranslation('');
     };
 
     return (
@@ -845,14 +886,9 @@ function VoiceNotebook({ onBack }) {
                 <button type="button" onClick={saveNote} disabled={!noteText.trim()} className="eary-soft eary-brand flex h-10 w-10 items-center justify-center rounded-lg disabled:opacity-30" title="Notu kaydet">{saved ? <Check size={18}/> : <Save size={18}/>}</button>
             </header>
 
-            <section className="grid grid-cols-2 gap-2 border-b eary-line px-4 py-3">
+            <section className="border-b eary-line px-4 py-3">
                 <label className="block text-[10px] font-black uppercase eary-muted">Konuşma dili
                     <select value={language} onChange={event => setLanguage(event.target.value)} disabled={listening} className="eary-input mt-1 w-full rounded-lg border px-2 py-2 text-xs font-bold normal-case disabled:opacity-60">
-                        {SUPPORTED_LANGUAGES.map(item => <option key={item.code} value={item.code}>{item.nativeLabel}</option>)}
-                    </select>
-                </label>
-                <label className="block text-[10px] font-black uppercase eary-muted">Çeviri dili
-                    <select value={targetLang} onChange={event => setTargetLang(event.target.value)} className="eary-input mt-1 w-full rounded-lg border px-2 py-2 text-xs font-bold normal-case">
                         {SUPPORTED_LANGUAGES.map(item => <option key={item.code} value={item.code}>{item.nativeLabel}</option>)}
                     </select>
                 </label>
@@ -860,18 +896,31 @@ function VoiceNotebook({ onBack }) {
 
             <section className="flex-1 overflow-y-auto px-4 py-4">
                 <textarea
+                    ref={noteTextareaRef}
                     value={noteText}
-                    onChange={event => { setNoteText(event.target.value); setTranslation(''); }}
+                    onChange={handleNoteChange}
+                    onScroll={handleNoteScroll}
                     placeholder="Konuşarak veya yazarak not alın..."
                     className="eary-input min-h-[55vh] w-full resize-none rounded-lg border p-4 text-[17px] font-semibold leading-8"
                     aria-label="Not metni"
                 />
-                {interim && <div className="mt-3 rounded-lg border border-dashed eary-line p-3 text-sm italic eary-muted">{interim}</div>}
+                {interim && <p className="eary-muted mt-2 text-xs font-semibold">{interim}</p>}
                 <div className="mt-3 flex flex-wrap justify-end gap-2">
                     <button type="button" onClick={translateNote} disabled={!noteText.trim() || translating} className="eary-soft eary-brand flex items-center gap-1.5 rounded-lg px-3 py-2 text-[11px] font-bold disabled:opacity-30"><Languages size={14}/>{translating ? 'Çevriliyor' : 'Çevir'}</button>
                     <button type="button" onClick={saveNote} disabled={!noteText.trim()} className="eary-soft eary-brand flex items-center gap-1.5 rounded-lg px-3 py-2 text-[11px] font-bold disabled:opacity-30"><Save size={14}/>Kaydet</button>
                     <button type="button" onClick={clearNote} disabled={!noteText.trim() && !interim} className="eary-soft eary-muted flex items-center gap-1.5 rounded-lg px-3 py-2 text-[11px] font-bold disabled:opacity-30"><Trash2 size={14}/>Temizle</button>
                 </div>
+                {showTranslationTools && (
+                    <div className="mt-3 flex items-end gap-2 rounded-lg border eary-line p-3">
+                        <label className="min-w-0 flex-1 text-[10px] font-black uppercase eary-muted">Çeviri dili
+                            <select value={targetLang} onChange={event => setTargetLang(event.target.value)} className="eary-input mt-1 w-full rounded-lg border px-2 py-2 text-xs font-bold normal-case">
+                                {SUPPORTED_LANGUAGES.map(item => <option key={item.code} value={item.code}>{item.nativeLabel}</option>)}
+                            </select>
+                        </label>
+                        <button type="button" onClick={translateNote} disabled={!noteText.trim() || translating} className="eary-brand-bg rounded-lg px-3 py-2 text-[11px] font-bold disabled:opacity-30">{translating ? 'Bekle' : 'Uygula'}</button>
+                        <button type="button" onClick={() => { setShowTranslationTools(false); setTranslation(''); }} className="eary-soft eary-muted flex h-9 w-9 items-center justify-center rounded-lg" title="Çeviriyi kapat"><X size={15}/></button>
+                    </div>
+                )}
                 {translation && <article className="mt-3 rounded-lg border border-emerald-200 bg-emerald-50 p-3 text-sm font-semibold leading-6 text-emerald-950 whitespace-pre-line">{translation}</article>}
             </section>
 
