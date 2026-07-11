@@ -1,15 +1,11 @@
 import { useState, useEffect } from 'react';
-import { History, MessageSquare, Shield, User, Lock, Key, Trash2, Menu } from 'lucide-react';
+import { History, MessageSquare, Shield, User, Trash2, Menu } from 'lucide-react';
 import {
-    db, auth, ref, set, get, getRest, updateRest, remove, onValue, update, query, limitToLast,
-    createUserWithEmailAndPassword, signInWithEmailAndPassword, sendEmailVerification,
-    signInWithPhoneNumber, RecaptchaVerifier, signOut
+    db, ref, set, get, getRest, updateRest, remove, onValue, update, query, limitToLast
 } from '../firebase';
 import Sidebar from './Sidebar';
 import ChatHome from './ChatHome';
 import { normalizeAppLanguage } from '../utils/language';
-import { sha256Hex } from '../utils/hash';
-import { phoneLookupKey } from '../utils/identity';
 import { registerUserPushNotifications } from '../utils/pushNotifications';
 
 const TRANSLATIONS = {
@@ -30,25 +26,7 @@ const TRANSLATIONS = {
         placeholderPin: 'Oda güvenlik şifresi',
         placeholderNickname: 'Örn: Ahmet veya Ayşe',
         noHistory: 'Kayıtlı geçmiş oda bulunmuyor.',
-        offlineHelpTitle: 'Çevrimdışı Dil Paketleri (Android)',
-        offlineHelpText: 'Sorunsuz ve pop-upsız ses kaydı için telefonunuza çevrimdışı dil paketi yüklemeniz önerilir.',
-        offlineHelpBtn: 'Ses Ayarlarını Aç',
-        offlineHelpGuide: 'Açılan sayfada "Çevrimdışı ses tanıma" -> "Tümü" kısmından seçtiğiniz dili indirin.',
-        authLogin: 'Giriş Yap',
-        authRegister: 'Kayıt Ol',
-        authUsername: 'Kullanıcı Adı',
-        authPassword: 'Şifre',
-        authNickname: 'Adınız / Takma Ad',
-        authBtnLogin: 'Giriş Yap',
-        authBtnRegister: 'Kayıt Ol',
-        authOr: 'veya',
-        authBack: 'Giriş Yapmadan Devam Et',
-        authErrExists: 'Bu kullanıcı adı zaten alınmış.',
-        authErrNotFound: 'Kullanıcı bulunamadı.',
-        authErrWrongPass: 'Hatalı şifre.',
-        authSuccessLogin: 'Giriş başarılı!',
-        authSuccessRegister: 'Kayıt başarılı! Giriş yapıldı.',
-        authLogout: 'Çıkış Yap',
+        authLogout: 'Profili Sıfırla',
         authCloudSync: 'Bulut Geçmişi',
         tabJoin: 'Odaya Katıl',
         tabCreate: 'Yeni Oda Oluştur',
@@ -62,6 +40,35 @@ const TRANSLATIONS = {
     }
 };
 
+const LAST_MESSAGES_CACHE_KEY = 'eary_last_messages_v1';
+const LOCAL_USERNAME_KEY = 'eary_local_username_v1';
+
+const makeLocalUsername = () => {
+    const stored = localStorage.getItem(LOCAL_USERNAME_KEY);
+    if (stored) return stored;
+    const randomPart = typeof crypto !== 'undefined' && crypto.randomUUID
+        ? crypto.randomUUID().replace(/-/g, '').slice(0, 10)
+        : `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
+    const username = `eary${randomPart}`.toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 24);
+    localStorage.setItem(LOCAL_USERNAME_KEY, username);
+    return username;
+};
+
+const readLastMessagesCache = () => {
+    try {
+        return JSON.parse(localStorage.getItem(LAST_MESSAGES_CACHE_KEY) || '{}');
+    } catch {
+        return {};
+    }
+};
+
+const writeLastMessagesCache = value => {
+    try {
+        localStorage.setItem(LAST_MESSAGES_CACHE_KEY, JSON.stringify(value));
+    } catch {
+        // Cache is an optimization; ignore storage quota/private mode failures.
+    }
+};
 
 export default function RoomSetup({ onJoin, language, onLanguageChange, theme, onToggleTheme, onlineVisibility, setOnlineVisibility }) {
     const [roomId, setRoomId] = useState('');
@@ -72,7 +79,6 @@ export default function RoomSetup({ onJoin, language, onLanguageChange, theme, o
     const [actionTab, setActionTab] = useState('join'); // 'join' or 'create'
     const [history, setHistory] = useState([]);
     const [error, setError] = useState('');
-    const [authBusy, setAuthBusy] = useState(false);
     const [showNewRoomForm, setShowNewRoomForm] = useState(false);
     const [isSidebarOpen, setIsSidebarOpen] = useState(false);
     const [alwaysNotify, setAlwaysNotify] = useState(() => localStorage.getItem('eary_always_notify') !== 'false');
@@ -82,15 +88,9 @@ export default function RoomSetup({ onJoin, language, onLanguageChange, theme, o
     const [translationTargetLang, setTranslationTargetLang] = useState(() => localStorage.getItem('eary_translation_target_lang') || 'tr-TR');
     const [chatFontSize, setChatFontSize] = useState(() => Number(localStorage.getItem('eary_chat_font_size')) || 16);
     const [searchQuery, setSearchQuery] = useState('');
-    const [activeFilter, setActiveFilter] = useState('all'); // 'all', 'active', 'past'
-    const [lastMessages, setLastMessages] = useState({});
+    const [activeFilter, setActiveFilter] = useState('all'); // 'all', 'unread', 'active', 'past'
+    const [lastMessages, setLastMessages] = useState(readLastMessagesCache);
     const [presenceData, setPresenceData] = useState({});
-    const [presenceTick, setPresenceTick] = useState(0);
-
-    useEffect(() => {
-        const timer = setInterval(() => setPresenceTick(value => value + 1), 15000);
-        return () => clearInterval(timer);
-    }, []);
 
     const setSpeechLang = nextLanguage => {
         const normalized = normalizeAppLanguage(nextLanguage);
@@ -102,10 +102,27 @@ export default function RoomSetup({ onJoin, language, onLanguageChange, theme, o
     useEffect(() => {
         const unsubs = [];
         let active = true;
+        const commitLastMessage = (rId, message) => {
+            setLastMessages(prev => {
+                const next = { ...prev, [rId]: message };
+                writeLastMessagesCache(next);
+                return next;
+            });
+        };
+
         history.forEach(item => {
             const rId = item.roomId;
-            
-            // 1. Listen to last message
+
+            const lastMessageRef = ref(db, `rooms/${rId}/lastMessage`);
+            const unsubLastMessage = onValue(lastMessageRef, snapshot => {
+                if (snapshot.exists()) {
+                    commitLastMessage(rId, snapshot.val());
+                }
+            });
+            unsubs.push(unsubLastMessage);
+
+            // Legacy rooms may not have /lastMessage yet. Keep a lightweight
+            // fallback listener so old conversations still show a preview.
             const messagesRef = ref(db, `rooms/${rId}/messages`);
             const lastMsgQuery = query(messagesRef, limitToLast(1));
             const unsubMsg = onValue(lastMsgQuery, (snapshot) => {
@@ -113,16 +130,10 @@ export default function RoomSetup({ onJoin, language, onLanguageChange, theme, o
                     const data = snapshot.val();
                     const keys = Object.keys(data);
                     if (keys.length > 0) {
-                        setLastMessages(prev => ({
-                            ...prev,
-                            [rId]: data[keys[0]]
-                        }));
+                        commitLastMessage(rId, { id: keys[0], ...data[keys[0]] });
                     }
                 } else {
-                    setLastMessages(prev => ({
-                        ...prev,
-                        [rId]: null
-                    }));
+                    commitLastMessage(rId, null);
                 }
             });
             unsubs.push(unsubMsg);
@@ -150,7 +161,9 @@ export default function RoomSetup({ onJoin, language, onLanguageChange, theme, o
         });
 
         const refreshLastMessages = async () => {
-            const results = await Promise.all(history.map(async item => {
+            const missingHistory = history.filter(item => !Object.prototype.hasOwnProperty.call(readLastMessagesCache(), item.roomId));
+            if (!missingHistory.length) return;
+            const results = await Promise.all(missingHistory.map(async item => {
                 if (item.isTestBot || item.roomId === 'local-test-bot') {
                     try {
                         const saved = JSON.parse(localStorage.getItem(`eary_test_bot_messages_${item.roomId}`) || '[]');
@@ -175,17 +188,18 @@ export default function RoomSetup({ onJoin, language, onLanguageChange, theme, o
                 results.forEach(result => {
                     if (result) next[result[0]] = result[1];
                 });
+                writeLastMessagesCache(next);
                 return next;
             });
         };
         refreshLastMessages();
-        const restTimer = setInterval(refreshLastMessages, 1500);
+        const restTimer = setInterval(refreshLastMessages, 30000);
         return () => {
             active = false;
             clearInterval(restTimer);
             unsubs.forEach(unsub => unsub());
         };
-    }, [history, presenceTick]);
+    }, [history]);
 
     useEffect(() => {
         localStorage.setItem('eary_always_notify', String(alwaysNotify));
@@ -211,17 +225,9 @@ export default function RoomSetup({ onJoin, language, onLanguageChange, theme, o
     const handleToggleAutoTranslate = () => setAutoTranslate(prev => !prev);
     const handleToggleSplitScreen = () => setSplitScreenEnabled(prev => !prev);
 
-    // User Account & Authentication States
+    // Local Eary identity
     const [account, setAccount] = useState(null); // { username, nickname }
-    const [authMode, setAuthMode] = useState('room'); // 'room' (main UI), 'login' (sign in form), 'register' (sign up form)
-    const [authUsername, setAuthUsername] = useState('');
-    const [authPassword, setAuthPassword] = useState('');
-    const [authNickname, setAuthNickname] = useState('');
-    const [authMethod, setAuthMethod] = useState('legacy');
-    const [authContact, setAuthContact] = useState('');
-    const [verificationCode, setVerificationCode] = useState('');
-    const [phoneConfirmation, setPhoneConfirmation] = useState(null);
-    const [pendingPhoneProfile, setPendingPhoneProfile] = useState(null);
+    const [authMode, setAuthMode] = useState('room');
 
     useEffect(() => {
         if (!account?.username) return undefined;
@@ -247,7 +253,11 @@ export default function RoomSetup({ onJoin, language, onLanguageChange, theme, o
             });
         };
         const historyRef = ref(db, `users/${account.username}/history`);
-        const unsubscribe = onValue(historyRef, snapshot => applyCloudHistory(snapshot.val()));
+        const unsubscribe = onValue(
+            historyRef,
+            snapshot => applyCloudHistory(snapshot.val()),
+            error => console.warn('Cloud history listener unavailable:', error)
+        );
         const refresh = async () => {
             try {
                 const restValue = await getRest(`users/${account.username}/history`);
@@ -276,7 +286,6 @@ export default function RoomSetup({ onJoin, language, onLanguageChange, theme, o
     const defaultPrivacy = {
         discoverByUsername: 'everyone',
         discoverByPhone: 'nobody',
-        profilePhoto: 'contacts',
         onlineStatus: 'contacts',
         lastSeen: 'contacts',
         groupInvites: 'contacts',
@@ -289,11 +298,11 @@ export default function RoomSetup({ onJoin, language, onLanguageChange, theme, o
             username,
             nickname: profile.nickname,
             profile: {
-                photo: profile.photo || '', bio: profile.bio || '',
+                bio: profile.bio || '',
                 preference: profile.preference || 'all', languages: profile.languages || ['TR'],
                 interests: profile.interests || [], privacy: { ...defaultPrivacy, ...(profile.privacy || {}) },
-                contactMethod: profile.contactMethod || 'legacy', contactHint: profile.contactHint || '',
-                contactVerified: Boolean(profile.contactVerified)
+                contactMethod: 'invite', contactHint: '',
+                contactVerified: false
             }
         };
         setAccount(acc);
@@ -303,7 +312,6 @@ export default function RoomSetup({ onJoin, language, onLanguageChange, theme, o
         update(ref(db, `publicProfiles/${username}`), {
             username,
             nickname: profile.nickname,
-            photo: acc.profile.privacy.profilePhoto === 'everyone' ? (profile.photo || '') : '',
             bio: profile.bio || '',
             discoverable: acc.profile.privacy.discoverByUsername !== 'nobody'
         }).catch(error => console.error('Public profile sync error:', error));
@@ -311,6 +319,61 @@ export default function RoomSetup({ onJoin, language, onLanguageChange, theme, o
         syncCloudHistory(username, savedHistory ? JSON.parse(savedHistory) : []);
         return acc;
     };
+
+    useEffect(() => {
+        if (account?.username) return;
+        let cancelled = false;
+
+        const ensureLocalAccount = async () => {
+            try {
+                const saved = JSON.parse(localStorage.getItem('duotalk_account') || 'null');
+                if (saved?.username && !cancelled) {
+                    const sanitizedProfile = {
+                        ...(saved.profile || {}),
+                        nickname: saved.nickname || saved.profile?.nickname || 'Eary kullanıcısı',
+                        privacy: { ...defaultPrivacy, ...(saved.profile?.privacy || {}) },
+                        contactMethod: 'invite',
+                        contactHint: '',
+                        contactVerified: false
+                    };
+                    createAccountSession(saved.username, sanitizedProfile);
+                    return;
+                }
+            } catch {
+                localStorage.removeItem('duotalk_account');
+            }
+
+            const username = makeLocalUsername();
+            const profile = {
+                nickname: localStorage.getItem('duotalk_nickname') || 'Eary kullanıcısı',
+                bio: '',
+                preference: 'all',
+                languages: ['TR'],
+                interests: [],
+                privacy: defaultPrivacy,
+                contactMethod: 'invite',
+                contactHint: '',
+                contactVerified: false,
+                inviteOnly: true,
+                createdAt: Date.now()
+            };
+            if (!cancelled) createAccountSession(username, profile);
+            update(ref(db), {
+                [`users/${username}/profile`]: profile,
+                [`publicProfiles/${username}`]: {
+                    username,
+                    nickname: profile.nickname,
+                    bio: '',
+                    discoverable: true
+                }
+            }).catch(error => console.error('Local Eary profile sync error:', error));
+        };
+
+        ensureLocalAccount();
+        return () => { cancelled = true; };
+        // Local identity bootstrap must run only until an account exists.
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [account?.username]);
 
     useEffect(() => {
         const handleBack = event => {
@@ -325,8 +388,11 @@ export default function RoomSetup({ onJoin, language, onLanguageChange, theme, o
     // Synchronize cloud history on mount or account login
     const syncCloudHistory = async (username, localHistory) => {
         try {
-            const restValue = await getRest(`users/${username}/history`).catch(() => null);
-            const cloudVal = restValue || (await get(ref(db, `users/${username}/history`))).val();
+            const restValue = await getRest(`users/${username}/history`).catch(error => {
+                console.warn('Cloud history REST unavailable:', error);
+                return null;
+            });
+            const cloudVal = restValue || null;
             if (cloudVal) {
                 const cloudList = Object.values(cloudVal);
                 // Merge cloud and local, sort by timestamp
@@ -335,7 +401,7 @@ export default function RoomSetup({ onJoin, language, onLanguageChange, theme, o
                 localHistory.forEach(item => mergedMap.set(item.roomId, item));
                 // Add cloud, cloud overrides because it's the source of truth
                 cloudList.forEach(item => mergedMap.set(item.roomId, item));
-                
+
                 const mergedList = Array.from(mergedMap.values())
                     .sort((a, b) => b.timestamp - a.timestamp)
                     .slice(0, 8); // Keep last 8
@@ -383,7 +449,7 @@ export default function RoomSetup({ onJoin, language, onLanguageChange, theme, o
                 const acc = JSON.parse(savedAccount);
                 setAccount(acc);
                 setNickname(acc.nickname);
-                
+
                 // Fetch cloud history for this user
                 syncCloudHistory(acc.username, localHistory);
             } catch (e) {
@@ -424,7 +490,7 @@ export default function RoomSetup({ onJoin, language, onLanguageChange, theme, o
             // Check Firebase if joining or creating
             const roomRef = ref(db, `rooms/${cleanRoomId}`);
             const roomSnapshot = await get(roomRef);
-            
+
             let detectedRoomType = roomType;
 
             if (actionTab === 'create') {
@@ -606,11 +672,11 @@ export default function RoomSetup({ onJoin, language, onLanguageChange, theme, o
 
     const handleRemoveHistoryItem = async (e, targetRoomId) => {
         e.stopPropagation(); // Prevent selecting the item
-        
+
         const updatedHistory = history.filter(item => item.roomId !== targetRoomId);
         setHistory(updatedHistory);
         localStorage.setItem('duotalk_history', JSON.stringify(updatedHistory));
-        
+
         if (updatedHistory.length === 0) setShowNewRoomForm(false);
 
         if (account) {
@@ -622,236 +688,15 @@ export default function RoomSetup({ onJoin, language, onLanguageChange, theme, o
         }
     };
 
-    const hashPassword = async (username, password) => {
-        return sha256Hex(`eary:${username}:${password}`);
-    };
-
-    const createPhoneVerifier = () => {
-        window.earyRecaptchaVerifier?.clear?.();
-        window.earyRecaptchaVerifier = new RecaptchaVerifier(auth, 'eary-recaptcha', { size: 'invisible' });
-        return window.earyRecaptchaVerifier;
-    };
-
-    const syncPhoneDiscovery = async updatedAccount => {
-        const phone = auth.currentUser?.phoneNumber;
-        if (!phone) return;
-        const key = await phoneLookupKey(phone);
-        if (updatedAccount.profile?.privacy?.discoverByPhone === 'contacts') {
-            await set(ref(db, `phoneDirectory/${key}`), { username: updatedAccount.username });
-        } else {
-            await remove(ref(db, `phoneDirectory/${key}`));
-        }
-    };
-
-    const authErrorMessage = error => ({
-        'auth/invalid-credential': 'E-posta veya şifre doğru değil.',
-        'auth/email-already-in-use': 'Bu e-posta ile daha önce hesap oluşturulmuş.',
-        'auth/invalid-email': 'Geçerli bir e-posta adresi girin.',
-        'auth/weak-password': 'Daha güçlü bir şifre seçin. Şifre en az 6 karakter olmalıdır.',
-        'auth/invalid-phone-number': 'Telefon numarasını ülke koduyla girin. Örnek: +43 660…',
-        'auth/too-many-requests': 'Çok fazla deneme yapıldı. Bir süre sonra tekrar deneyin.',
-        'auth/operation-not-allowed': 'Bu doğrulama yöntemi henüz Firebase panelinde etkin değil.',
-        'auth/configuration-not-found': 'Hesap sistemi henüz etkinleştirilmemiş. Firebase Authentication ayarlarında E-posta/Şifre yöntemini açın.',
-        'auth/unauthorized-domain': 'Bu adres Firebase doğrulaması için yetkilendirilmemiş.'
-    }[error.code] || error.message || 'Hesap işlemi tamamlanamadı.');
-
-    const withAuthTimeout = (promise, timeoutMs = 12000) => {
-        let timeoutId;
-        const timeout = new Promise((_, reject) => {
-            timeoutId = setTimeout(() => reject(new Error('Bağlantı zaman aşımına uğradı. İnternet/Firebase bağlantısını kontrol edip tekrar deneyin.')), timeoutMs);
-        });
-        return Promise.race([promise, timeout]).finally(() => clearTimeout(timeoutId));
-    };
-
-    const readUserProfile = async username => {
-        const restProfile = await getRest(`users/${username}/profile`, { timeoutMs: 6000 }).catch(() => null);
-        if (restProfile) return restProfile;
-        const snapshot = await withAuthTimeout(get(ref(db, `users/${username}/profile`)), 6000);
-        return snapshot.val();
-    };
-
-    const handleLogin = async (e) => {
-        e.preventDefault();
-        if (authBusy) return;
-        setAuthBusy(true);
-        setError('');
-
-        const activeAuthMethod = authUsername.includes('@') ? 'email' : 'legacy';
-        if (!authUsername.trim() || (activeAuthMethod !== 'phone' && !authPassword.trim())) {
-            setError(text.errorFill);
-            setAuthBusy(false);
-            return;
-        }
-
-        try {
-            if (activeAuthMethod === 'email') {
-                const credential = await withAuthTimeout(signInWithEmailAndPassword(auth, authUsername.trim(), authPassword));
-                const indexSnapshot = await withAuthTimeout(get(ref(db, `authUsers/${credential.user.uid}`)));
-                const username = indexSnapshot.val()?.username;
-                if (!username) throw new Error('Bu doğrulanmış hesaba bağlı kullanıcı adı bulunamadı.');
-                const profile = (await withAuthTimeout(get(ref(db, `users/${username}/profile`)))).val();
-                profile.contactVerified = credential.user.emailVerified;
-                await withAuthTimeout(update(ref(db, `users/${username}/profile`), { contactVerified: credential.user.emailVerified }));
-                createAccountSession(username, profile);
-                setAuthUsername(''); setAuthPassword('');
-                return;
-            }
-
-            if (activeAuthMethod === 'phone') {
-                const confirmation = await signInWithPhoneNumber(auth, authUsername.trim(), createPhoneVerifier());
-                setPhoneConfirmation(confirmation);
-                setPendingPhoneProfile({ type: 'login' });
-                setAuthMode('verify');
-                return;
-            }
-
-            const usernameClean = authUsername.trim().toLowerCase().replace(/[^a-z0-9]/g, '');
-            const profile = await readUserProfile(usernameClean);
-
-            if (!profile) {
-                setError(text.authErrNotFound);
-                return;
-            }
-
-            const passwordHash = await withAuthTimeout(hashPassword(usernameClean, authPassword), 4000);
-            const passwordMatches = profile.passwordHash === passwordHash || profile.password === authPassword;
-            if (!passwordMatches) {
-                setError(text.authErrWrongPass);
-                return;
-            }
-
-            if (!profile.passwordHash) {
-                await withAuthTimeout(update(ref(db, `users/${usernameClean}/profile`), { passwordHash, password: null }));
-            }
-
-            createAccountSession(usernameClean, profile);
-            setAuthUsername('');
-            setAuthPassword('');
-        } catch (e) {
-            setError(authErrorMessage(e));
-        } finally {
-            setAuthBusy(false);
-        }
-    };
-
-    const handleRegister = async (e) => {
-        e.preventDefault();
-        if (authBusy) return;
-        setAuthBusy(true);
-        setError('Kayıt oluşturuluyor...');
-
-        const email = authContact.trim();
-        const activeAuthMethod = email ? 'email' : 'legacy';
-        if (!authUsername.trim() || !authNickname.trim() || !authPassword.trim()) {
-            setError(text.errorFill);
-            setAuthBusy(false);
-            return;
-        }
-
-        const usernameClean = authUsername.trim().toLowerCase().replace(/[^a-z0-9]/g, '');
-        if (usernameClean.length < 3) {
-            setError('Kullanıcı adı en az 3 harf veya rakam içermelidir.');
-            setAuthBusy(false);
-            return;
-        }
-        if (authPassword.length < 6) {
-            setError('Şifre en az 6 karakter olmalıdır.');
-            setAuthBusy(false);
-            return;
-        }
-        if (email && !email.includes('@')) {
-            setError('E-posta adresi geçerli görünmüyor. İstersen boş bırakıp sadece kullanıcı adıyla kayıt olabilirsin.');
-            setAuthBusy(false);
-            return;
-        }
-
-        const passwordHash = await hashPassword(usernameClean, authPassword);
-        const baseProfile = {
-            nickname: authNickname.trim(),
-            photo: '',
-            bio: '',
-            preference: 'all',
-            languages: ['TR'],
-            interests: [],
-            privacy: defaultPrivacy,
-            contactMethod: activeAuthMethod,
-            contactHint: email ? email.replace(/(^.).*(@.*$)/, '$1***$2') : '',
-            contactVerified: false,
-            passwordHash,
-            createdAt: Date.now()
-        };
-
-        try {
-            const checkSnapshot = await withAuthTimeout(get(ref(db, `users/${usernameClean}/profile`)));
-            if (checkSnapshot.exists()) {
-                setError(text.authErrExists);
-                return;
-            }
-
-            if (email) {
-                const credential = await withAuthTimeout(createUserWithEmailAndPassword(auth, email, authPassword));
-                await withAuthTimeout(sendEmailVerification(credential.user));
-                await withAuthTimeout(set(ref(db, `authUsers/${credential.user.uid}`), { username: usernameClean }));
-            }
-
-            await withAuthTimeout(update(ref(db), {
-                [`users/${usernameClean}/profile`]: baseProfile,
-                [`publicProfiles/${usernameClean}`]: {
-                    username: usernameClean,
-                    nickname: baseProfile.nickname,
-                    photo: '',
-                    bio: '',
-                    discoverable: true
-                }
-            }));
-
-            createAccountSession(usernameClean, baseProfile);
-            setError('');
-            setAuthUsername('');
-            setAuthPassword('');
-            setAuthNickname('');
-            setAuthContact('');
-        } catch (error) {
-            console.error('Registration failed:', error);
-            setError(authErrorMessage(error));
-        } finally {
-            setAuthBusy(false);
-        }
-    };
-
-    const handleVerifyPhone = async event => {
-        event.preventDefault();
-        setError('');
-        try {
-            const credential = await phoneConfirmation.confirm(verificationCode.trim());
-            if (pendingPhoneProfile?.type === 'register') {
-                const { username, profile } = pendingPhoneProfile;
-                await set(ref(db, `authUsers/${credential.user.uid}`), { username });
-                await set(ref(db, `users/${username}/profile`), profile);
-                await set(ref(db, `publicProfiles/${username}`), { username, nickname: profile.nickname, photo: '', bio: '', discoverable: true });
-                createAccountSession(username, profile);
-            } else {
-                const username = (await get(ref(db, `authUsers/${credential.user.uid}`))).val()?.username;
-                if (!username) throw new Error('Bu telefona bağlı Eary hesabı bulunamadı.');
-                const profile = (await get(ref(db, `users/${username}/profile`))).val();
-                createAccountSession(username, profile);
-            }
-            setVerificationCode(''); setPhoneConfirmation(null); setPendingPhoneProfile(null);
-        } catch (error) {
-            setError(error.code === 'auth/invalid-verification-code' ? 'Doğrulama kodu yanlış.' : authErrorMessage(error));
-        }
-    };
-
     const handleLogout = () => {
-        signOut(auth).catch(error => console.warn('Firebase sign out failed:', error));
         setAccount(null);
         setNickname('');
         localStorage.removeItem('duotalk_account');
+        localStorage.removeItem(LOCAL_USERNAME_KEY);
         setHistory([]);
         localStorage.removeItem('duotalk_history');
-        setAuthMode('login');
+        setAuthMode('room');
     };
-
     const handleUpdateAccount = async (updatedAcc) => {
         setAccount(updatedAcc);
         setNickname(updatedAcc.nickname);
@@ -862,40 +707,55 @@ export default function RoomSetup({ onJoin, language, onLanguageChange, theme, o
                 const profileRef = ref(db, `users/${updatedAcc.username}/profile`);
                 await update(profileRef, {
                     nickname: updatedAcc.nickname,
-                    photo: updatedAcc.profile.photo,
                     bio: updatedAcc.profile.bio,
                     preference: updatedAcc.profile.preference,
                     languages: updatedAcc.profile.languages,
                     interests: updatedAcc.profile.interests,
-                    privacy: updatedAcc.profile.privacy || defaultPrivacy,
-                    contactMethod: updatedAcc.profile.contactMethod || 'legacy',
-                    contactHint: updatedAcc.profile.contactHint || '',
-                    contactVerified: Boolean(updatedAcc.profile.contactVerified)
+                    privacy: updatedAcc.profile.privacy || defaultPrivacy
                 });
                 await update(ref(db, `publicProfiles/${updatedAcc.username}`), {
                     username: updatedAcc.username,
                     nickname: updatedAcc.nickname,
-                    photo: updatedAcc.profile.privacy?.profilePhoto === 'everyone' ? (updatedAcc.profile.photo || '') : '',
                     bio: updatedAcc.profile.bio || '',
                     discoverable: updatedAcc.profile.privacy?.discoverByUsername !== 'nobody'
                 });
-                await syncPhoneDiscovery(updatedAcc);
             } catch (err) {
                 console.error("Firebase Profile Update Error:", err);
             }
         }
     };
+    const handleDeleteAccount = async () => {
+        if (!account?.username) throw new Error('Oturum bulunamadı.');
+        const usernameClean = account.username.trim().toLowerCase();
+        await update(ref(db), {
+            [`users/${usernameClean}/profile`]: null,
+            [`publicProfiles/${usernameClean}`]: null
+        });
+        handleLogout();
+    };
 
     const filteredHistory = history.filter(item => {
-        const matchesSearch = item.roomId.toLowerCase().includes(searchQuery.toLowerCase()) || 
-                              item.nickname.toLowerCase().includes(searchQuery.toLowerCase());
+        const queryText = searchQuery.trim().toLowerCase();
+        const lastMessage = lastMessages[item.roomId];
+        const searchableText = [
+            item.roomId,
+            item.nickname,
+            item.title,
+            item.peerUsername,
+            lastMessage?.senderName,
+            lastMessage?.text
+        ].filter(Boolean).join(' ').toLowerCase();
+        const matchesSearch = !queryText || searchableText.includes(queryText);
         if (!matchesSearch) return false;
-        
+
         const presence = presenceData[item.roomId];
         const isActive = presence && presence.count > 0;
-        
+        const isUnread = lastMessage?.timestamp > (item.timestamp || 0) && lastMessage.senderName !== item.nickname;
+
         if (activeFilter === 'active') {
             return isActive;
+        } else if (activeFilter === 'unread') {
+            return isUnread;
         } else if (activeFilter === 'past') {
             return !isActive;
         }
@@ -908,25 +768,8 @@ export default function RoomSetup({ onJoin, language, onLanguageChange, theme, o
             <>
                 <ChatHome
                     account={account}
-                    authMode={authMode}
-                    setAuthMode={setAuthMode}
-                    authUsername={authUsername}
-                    setAuthUsername={setAuthUsername}
-                    authPassword={authPassword}
-                    setAuthPassword={setAuthPassword}
-                    authNickname={authNickname}
-                    setAuthNickname={setAuthNickname}
-                    authMethod={authMethod}
-                    setAuthMethod={setAuthMethod}
-                    authContact={authContact}
-                    setAuthContact={setAuthContact}
-                    verificationCode={verificationCode}
-                    setVerificationCode={setVerificationCode}
-                    handleVerifyPhone={handleVerifyPhone}
-                    handleLogin={handleLogin}
-                    handleRegister={handleRegister}
-                    authBusy={authBusy}
                     error={error}
+                    language={language}
                     onOpenTestBot={() => handleSelectHistory({ isTestBot: true })}
                     showNewRoomForm={showNewRoomForm}
                     setShowNewRoomForm={setShowNewRoomForm}
@@ -957,10 +800,11 @@ export default function RoomSetup({ onJoin, language, onLanguageChange, theme, o
                     onClose={() => setIsSidebarOpen(false)}
                     account={account}
                     onLogout={handleLogout}
-                    onAuthClick={() => setAuthMode('login')}
                     alwaysNotify={alwaysNotify}
                     onToggleAlwaysNotify={handleToggleAlwaysNotify}
                     onUpdateAccount={handleUpdateAccount}
+                    onDeleteAccount={handleDeleteAccount}
+                    language={language}
                     speechLang={speechLang}
                     setSpeechLang={setSpeechLang}
                     translationTargetLang={translationTargetLang}
@@ -991,7 +835,7 @@ export default function RoomSetup({ onJoin, language, onLanguageChange, theme, o
                 <div className="flex items-center justify-between mb-8 relative z-10">
                     <div className="flex items-center gap-3">
                         {authMode === 'room' && (
-                            <button 
+                            <button
                                 type="button"
                                 onClick={() => setIsSidebarOpen(true)}
                                 className="p-2.5 bg-[#F4F0FC] hover:bg-[#EBE5F7] border border-[#DCD0EC]/70 rounded-2xl text-[#7B52AB] transition-all duration-200 active:scale-95 cursor-pointer shadow-sm"
@@ -1017,13 +861,13 @@ export default function RoomSetup({ onJoin, language, onLanguageChange, theme, o
                     </div>
                 )}
 
-                {/* Account status header if logged in */}
+                {/* Local invite profile status */}
                 {authMode === 'room' && (
                     account ? (
                         <div className="mb-6 p-3 bg-[#F4F0FC]/50 border border-[#DCD0EC]/40 rounded-2xl flex items-center justify-between text-[11px] relative z-10 text-[#4B3E63] font-semibold">
                             <span className="flex items-center gap-1.5">
                                 <span className="w-1.5 h-1.5 bg-emerald-500 rounded-full animate-pulse" />
-                                {account.nickname} (@{account.username})
+                                {account.nickname} · Davet profili aktif
                             </span>
                             <button
                                 onClick={handleLogout}
@@ -1033,168 +877,11 @@ export default function RoomSetup({ onJoin, language, onLanguageChange, theme, o
                             </button>
                         </div>
                     ) : (
-                        <div className="mb-6 p-3 bg-[#F4F0FC]/50 border border-[#DCD0EC]/40 rounded-2xl flex items-center justify-between text-[11px] relative z-10 leading-normal text-[#4B3E63] font-semibold">
-                            <span>
-                                ⚠️ Misafir oturumu aktif. Oda geçmişinizi bulutta saklamak için menüden giriş yapabilirsiniz.
-                            </span>
-                            <button
-                                onClick={() => setAuthMode('login')}
-                                className="px-2.5 py-1 bg-[#7B52AB] hover:bg-[#663F93] text-white rounded-lg border border-transparent transition-all font-bold cursor-pointer shrink-0 ml-2 shadow-sm"
-                            >
-                                Giriş Yap
-                            </button>
+                        <div className="mb-6 p-3 bg-[#F4F0FC]/50 border border-[#DCD0EC]/40 rounded-2xl text-[11px] relative z-10 leading-normal text-[#4B3E63] font-semibold">
+                            Eary profili hazırlanıyor.
                         </div>
                     )
                 )}
-
-                {/* Login Form */}
-                {authMode === 'login' && (
-                    <form onSubmit={handleLogin} className="space-y-5 relative z-10">
-                        <div className="space-y-2">
-                            <label className="text-xs font-semibold text-[#4B3E63] uppercase tracking-widest flex items-center gap-1.5">
-                                <User size={13} className="text-[#7B52AB]" />
-                                {text.authUsername}
-                            </label>
-                            <input 
-                                type="text"
-                                value={authUsername}
-                                onChange={(e) => setAuthUsername(e.target.value)}
-                                placeholder="Örn: ahmet123"
-                                className="w-full bg-white border border-[#DCD0EC] rounded-2xl px-4 py-3.5 text-[#2D1F47] placeholder-slate-400 focus:outline-none focus:border-[#7B52AB] focus:ring-1 focus:ring-[#7B52AB] text-sm transition-all duration-200"
-                            />
-                        </div>
-
-                        <div className="space-y-2">
-                            <label className="text-xs font-semibold text-[#4B3E63] uppercase tracking-widest flex items-center gap-1.5">
-                                <Lock size={13} className="text-[#7B52AB]" />
-                                {text.authPassword}
-                            </label>
-                            <input 
-                                type="password"
-                                value={authPassword}
-                                onChange={(e) => setAuthPassword(e.target.value)}
-                                placeholder="••••••••"
-                                className="w-full bg-white border border-[#DCD0EC] rounded-2xl px-4 py-3.5 text-[#2D1F47] placeholder-slate-400 focus:outline-none focus:border-[#7B52AB] focus:ring-1 focus:ring-[#7B52AB] text-sm transition-all duration-200"
-                            />
-                        </div>
-
-                        <div className="flex flex-col gap-3 pt-2">
-                            <button 
-                                type="submit"
-                                className="w-full py-4 bg-[#7B52AB] hover:bg-[#663F93] text-white font-bold rounded-2xl text-center text-sm transition-all duration-200 uppercase tracking-widest cursor-pointer shadow-md"
-                            >
-                                {text.authBtnLogin}
-                            </button>
-                            
-                            <button 
-                                type="button"
-                                onClick={() => {
-                                    setAuthMode('room');
-                                    setError('');
-                                }}
-                                className="w-full py-3 bg-[#F4F0FC] hover:bg-[#EBE5F7] border border-[#DCD0EC]/50 text-[#7B52AB] rounded-2xl text-center text-xs font-semibold transition-all cursor-pointer shadow-sm"
-                            >
-                                Misafir Olarak Devam Et
-                            </button>
-
-                            <div className="text-center mt-3 text-xs text-[#8A7E9F] font-medium">
-                                Hesabınız yok mu?{' '}
-                                <button
-                                    type="button"
-                                    onClick={() => {
-                                        setAuthMode('register');
-                                        setError('');
-                                    }}
-                                    className="text-[#7B52AB] hover:text-[#663F93] font-bold transition-all bg-transparent border-0 p-0 cursor-pointer ml-1"
-                                >
-                                    Kayıt Olun
-                                </button>
-                            </div>
-                        </div>
-                    </form>
-                )}
-
-                {/* Register Form */}
-                {authMode === 'register' && (
-                    <form onSubmit={handleRegister} className="space-y-5 relative z-10">
-                        <div className="space-y-2">
-                            <label className="text-xs font-semibold text-[#4B3E63] uppercase tracking-widest flex items-center gap-1.5">
-                                <User size={13} className="text-[#7B52AB]" />
-                                {text.authUsername}
-                            </label>
-                            <input 
-                                type="text"
-                                value={authUsername}
-                                onChange={(e) => setAuthUsername(e.target.value)}
-                                placeholder="Örn: ahmet123 (harf ve sayı)"
-                                className="w-full bg-white border border-[#DCD0EC] rounded-2xl px-4 py-3.5 text-[#2D1F47] placeholder-slate-400 focus:outline-none focus:border-[#7B52AB] focus:ring-1 focus:ring-[#7B52AB] text-sm transition-all duration-200"
-                            />
-                        </div>
-
-                        <div className="space-y-2">
-                            <label className="text-xs font-semibold text-[#4B3E63] uppercase tracking-widest flex items-center gap-1.5">
-                                <Lock size={13} className="text-[#7B52AB]" />
-                                {text.authPassword}
-                            </label>
-                            <input 
-                                type="password"
-                                value={authPassword}
-                                onChange={(e) => setAuthPassword(e.target.value)}
-                                placeholder="••••••••"
-                                className="w-full bg-white border border-[#DCD0EC] rounded-2xl px-4 py-3.5 text-[#2D1F47] placeholder-slate-400 focus:outline-none focus:border-[#7B52AB] focus:ring-1 focus:ring-[#7B52AB] text-sm transition-all duration-200"
-                            />
-                        </div>
-
-                        <div className="space-y-2">
-                            <label className="text-xs font-semibold text-[#4B3E63] uppercase tracking-widest flex items-center gap-1.5">
-                                <Key size={13} className="text-[#7B52AB]" />
-                                {text.authNickname}
-                            </label>
-                            <input 
-                                type="text"
-                                value={authNickname}
-                                onChange={(e) => setAuthNickname(e.target.value)}
-                                placeholder="Örn: Ahmet Yılmaz"
-                                className="w-full bg-white border border-[#DCD0EC] rounded-2xl px-4 py-3.5 text-[#2D1F47] placeholder-slate-400 focus:outline-none focus:border-[#7B52AB] focus:ring-1 focus:ring-[#7B52AB] text-sm transition-all duration-200"
-                            />
-                        </div>
-
-                        <div className="flex flex-col gap-3 pt-2">
-                            <button 
-                                type="submit"
-                                className="w-full py-4 bg-[#7B52AB] hover:bg-[#663F93] text-white font-bold rounded-2xl text-center text-sm transition-all duration-200 uppercase tracking-widest cursor-pointer shadow-md"
-                            >
-                                {text.authBtnRegister}
-                            </button>
-                            
-                            <button 
-                                type="button"
-                                onClick={() => {
-                                    setAuthMode('room');
-                                    setError('');
-                                }}
-                                className="w-full py-3 bg-[#F4F0FC] hover:bg-[#EBE5F7] border border-[#DCD0EC]/50 text-[#7B52AB] rounded-2xl text-center text-xs font-semibold transition-all cursor-pointer shadow-sm"
-                            >
-                                Misafir Olarak Devam Et
-                            </button>
-
-                            <div className="text-center mt-3 text-xs text-[#8A7E9F] font-medium">
-                                Zaten bir hesabınız var mı?{' '}
-                                <button
-                                    type="button"
-                                    onClick={() => {
-                                        setAuthMode('login');
-                                        setError('');
-                                    }}
-                                    className="text-[#7B52AB] hover:text-[#663F93] font-bold transition-all bg-transparent border-0 p-0 cursor-pointer ml-1"
-                                >
-                                    Giriş Yapın
-                                </button>
-                            </div>
-                        </div>
-                    </form>
-                )}
-
                 {/* Entry Form */}
                 {authMode === 'room' && (
                     <>
@@ -1239,7 +926,7 @@ export default function RoomSetup({ onJoin, language, onLanguageChange, theme, o
                                                 <MessageSquare size={13} className="text-[#7B52AB]" />
                                                 {text.roomId}
                                             </label>
-                                            <input 
+                                            <input
                                                 type="text"
                                                 value={roomId}
                                                 onChange={(e) => setRoomId(e.target.value)}
@@ -1254,7 +941,7 @@ export default function RoomSetup({ onJoin, language, onLanguageChange, theme, o
                                                 <Shield size={13} className="text-[#7B52AB]" />
                                                 {text.roomPin}
                                             </label>
-                                            <input 
+                                            <input
                                                 type="password"
                                                 value={roomPin}
                                                 onChange={(e) => setRoomPin(e.target.value)}
@@ -1269,7 +956,7 @@ export default function RoomSetup({ onJoin, language, onLanguageChange, theme, o
                                                 <User size={13} className="text-[#7B52AB]" />
                                                 {text.nickname}
                                             </label>
-                                            <input 
+                                            <input
                                                 type="text"
                                                 value={nickname}
                                                 onChange={(e) => setNickname(e.target.value)}
@@ -1279,16 +966,16 @@ export default function RoomSetup({ onJoin, language, onLanguageChange, theme, o
                                             />
                                         </div>
 
-                                        <button 
+                                        <button
                                             type="submit"
                                             className="w-full py-4 bg-[#7B52AB] hover:bg-[#663F93] text-white font-bold rounded-2xl mt-4 text-center text-sm transition-all duration-200 uppercase tracking-widest cursor-pointer shadow-md"
                                         >
                                             {actionTab === 'create' ? text.tabCreate : text.tabJoin}
                                         </button>
-                                        
+
                                         {/* Back to history button */}
                                         {history.length > 0 && (
-                                            <button 
+                                            <button
                                                 type="button"
                                                 onClick={() => setShowNewRoomForm(false)}
                                                 className="w-full py-3 mt-2 bg-[#F4F0FC] hover:bg-[#EBE5F7] border border-[#DCD0EC]/50 text-[#7B52AB] rounded-2xl text-center text-xs font-bold transition-all cursor-pointer shadow-sm"
@@ -1361,7 +1048,7 @@ export default function RoomSetup({ onJoin, language, onLanguageChange, theme, o
                                         Geçmiş Odalar
                                     </button>
                                 </div>
-                                
+
                                 <div className="space-y-2.5 max-h-[300px] overflow-y-auto pr-1 flex-1">
                                     {filteredHistory.length === 0 ? (
                                         <div className="text-center py-8 text-xs text-[#8A7E9F] font-semibold italic">
@@ -1371,8 +1058,8 @@ export default function RoomSetup({ onJoin, language, onLanguageChange, theme, o
                                         filteredHistory.map((item, idx) => {
                                             const lastMsg = lastMessages[item.roomId];
                                             const presence = presenceData[item.roomId];
-                                            const displayTime = lastMsg 
-                                                ? new Date(lastMsg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) 
+                                            const displayTime = lastMsg
+                                                ? new Date(lastMsg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
                                                 : new Date(item.timestamp).toLocaleDateString([], { month: 'short', day: 'numeric' });
 
                                             return (
@@ -1389,7 +1076,7 @@ export default function RoomSetup({ onJoin, language, onLanguageChange, theme, o
                                                                 <span className="absolute -bottom-0.5 -right-0.5 w-3.5 h-3.5 bg-emerald-500 border-2 border-white rounded-full animate-pulse" />
                                                             )}
                                                         </div>
-                                                        
+
                                                         <div className="min-w-0 flex-1 ml-3">
                                                             <div className="flex items-center justify-between">
                                                                 <span className="font-extrabold text-sm text-[#2D1F47] truncate">{item.roomId}</span>
@@ -1420,7 +1107,7 @@ export default function RoomSetup({ onJoin, language, onLanguageChange, theme, o
                                                             </div>
                                                         </div>
                                                     </div>
-                                                    
+
                                                     <div className="flex items-center gap-2 shrink-0 ml-2">
                                                         <button
                                                             type="button"
@@ -1439,7 +1126,7 @@ export default function RoomSetup({ onJoin, language, onLanguageChange, theme, o
                                         })
                                     )}
                                 </div>
-                                
+
                                 <button
                                     type="button"
                                     onClick={() => {
@@ -1458,19 +1145,19 @@ export default function RoomSetup({ onJoin, language, onLanguageChange, theme, o
                 )}
             </div>
 
-            <Sidebar 
+            <Sidebar
                 isOpen={isSidebarOpen}
                 onClose={() => setIsSidebarOpen(false)}
                 language={language}
                 account={account}
                 onLogout={handleLogout}
-                onAuthClick={() => setAuthMode('login')}
                 history={history}
                 onSelectRoom={handleSelectHistory}
                 onRemoveRoom={handleRemoveHistoryItem}
                 alwaysNotify={alwaysNotify}
                 onToggleAlwaysNotify={handleToggleAlwaysNotify}
                 onUpdateAccount={handleUpdateAccount}
+                onDeleteAccount={handleDeleteAccount}
                 speechLang={speechLang}
                 setSpeechLang={setSpeechLang}
                 translationTargetLang={translationTargetLang}

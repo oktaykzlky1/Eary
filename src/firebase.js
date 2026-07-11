@@ -1,10 +1,10 @@
 import { initializeApp } from "firebase/app";
 import { getDatabase, ref, set, onValue, onDisconnect, push, remove, get, update, query, limitToLast, orderByKey } from "firebase/database";
-import { getStorage, ref as storageRef, uploadBytes, uploadBytesResumable, getDownloadURL } from "firebase/storage";
 import { getFunctions, httpsCallable } from "firebase/functions";
 import {
   getAuth, createUserWithEmailAndPassword, signInWithEmailAndPassword,
-  sendEmailVerification, sendPasswordResetEmail, signInWithPhoneNumber, RecaptchaVerifier, signOut
+  sendEmailVerification, sendPasswordResetEmail, signInWithPhoneNumber, RecaptchaVerifier, signOut,
+  EmailAuthProvider, reauthenticateWithCredential, updatePassword
 } from "firebase/auth";
 
 const firebaseConfig = {
@@ -23,7 +23,6 @@ export const databaseURL = firebaseConfig.databaseURL;
 // Initialize Firebase
 const app = initializeApp(firebaseConfig);
 export const db = getDatabase(app);
-export const storage = getStorage(app);
 export const auth = getAuth(app);
 export const functions = getFunctions(app, 'us-central1');
 export const requestAccountDeletion = httpsCallable(functions, 'requestAccountDeletion');
@@ -77,5 +76,7 @@ export const updateRest = async updates => {
 
 // Helper database references and functions
 export { ref, set, onValue, onDisconnect, push, remove, get, update, query, limitToLast, orderByKey };
-export { storageRef, uploadBytes, uploadBytesResumable, getDownloadURL };
-export { createUserWithEmailAndPassword, signInWithEmailAndPassword, sendEmailVerification, sendPasswordResetEmail, signInWithPhoneNumber, RecaptchaVerifier, signOut };
+export {
+  createUserWithEmailAndPassword, signInWithEmailAndPassword, sendEmailVerification, sendPasswordResetEmail,
+  signInWithPhoneNumber, RecaptchaVerifier, signOut, EmailAuthProvider, reauthenticateWithCredential, updatePassword
+};

@@ -166,9 +166,7 @@ export const notifyNewRoomMessage = functions
 
         if (recipients.length === 0) return;
 
-        const body = message.text || (
-            message.mediaType === 'video' ? 'Video gönderdi' : 'Fotoğraf gönderdi'
-        );
+        const body = message.text || 'Yeni mesaj';
         const response = await getMessaging().sendEachForMulticast({
             tokens: recipients.map(([, device]) => device.token),
             notification: {

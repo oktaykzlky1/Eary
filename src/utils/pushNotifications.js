@@ -7,7 +7,13 @@ const DEVICE_ID_KEY = 'eary_device_id';
 export const getDeviceId = () => {
     let deviceId = localStorage.getItem(DEVICE_ID_KEY);
     if (!deviceId) {
-        deviceId = crypto.randomUUID();
+        const nativeCrypto = globalThis.crypto;
+        if (nativeCrypto?.randomUUID) {
+            deviceId = nativeCrypto.randomUUID();
+        } else {
+            const randomPart = Math.random().toString(36).slice(2);
+            deviceId = `device-${Date.now().toString(36)}-${randomPart}`;
+        }
         localStorage.setItem(DEVICE_ID_KEY, deviceId);
     }
     return deviceId;

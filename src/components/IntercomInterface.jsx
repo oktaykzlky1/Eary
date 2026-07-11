@@ -1,13 +1,13 @@
 import { useState, useEffect, useLayoutEffect, useRef, useCallback } from 'react';
-import { db, auth, storage, ref, set, push, get, getRest, updateRest, remove, onValue, onDisconnect, update, query, limitToLast, storageRef, uploadBytesResumable, getDownloadURL } from '../firebase';
+import { db, auth, ref, set, push, get, getRest, updateRest, remove, onValue, onDisconnect, update, query, limitToLast } from '../firebase';
 import { getDuoSpeechRecognizer, rememberNativeSpeechTranscript } from '../utils/speech';
-import { correctTranscription } from '../utils/autocorrect';
+import { correctTranscription, extractPersonalTerms, rememberPersonalTerms } from '../utils/autocorrect';
 import { requestNotificationPermission, scheduleNotification } from '../utils/notifications';
 import { getDeviceId, registerRoomPushNotifications } from '../utils/pushNotifications';
 import { phoneLookupKey } from '../utils/identity';
 import { App } from '@capacitor/app';
 import { Capacitor, registerPlugin } from '@capacitor/core';
-import { Mic, Trash2, X, AlertTriangle, Watch, ArrowLeft, Menu, Send, Smile, Paperclip, Camera, ChevronDown, LoaderCircle, Reply, Forward, Pencil, Copy, Image as ImageIcon, Share2, Volume2, Save, Eraser, PanelsTopLeft, Square, Languages } from 'lucide-react';
+import { Mic, Trash2, X, AlertTriangle, Watch, ArrowLeft, Menu, Send, Smile, ChevronDown, Reply, Forward, Pencil, Copy, Share2, Volume2, Save, Eraser, PanelsTopLeft, Square, Languages } from 'lucide-react';
 
 const playBeep = (type) => {
     try {
@@ -16,7 +16,7 @@ const playBeep = (type) => {
         const gain = audioCtx.createGain();
         osc.connect(gain);
         gain.connect(audioCtx.destination);
-        
+
         if (type === 'start') {
             osc.frequency.setValueAtTime(880, audioCtx.currentTime); // A5
             gain.gain.setValueAtTime(0.08, audioCtx.currentTime);
@@ -29,7 +29,7 @@ const playBeep = (type) => {
             gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.08);
             osc.start(audioCtx.currentTime);
             osc.stop(audioCtx.currentTime + 0.08);
-            
+
             setTimeout(() => {
                 try {
                     const osc2 = audioCtx.createOscillator();
@@ -56,7 +56,9 @@ import { normalizeAppLanguage } from '../utils/language';
 const VoiceSettings = registerPlugin('VoiceSettings');
 const FACE_TO_FACE_PHRASES = ['Tekrar eder misiniz?', 'Biraz yavaş konuşur musunuz?', 'Lütfen yüzüme bakarak konuşun', 'Bunu yazabilir misiniz?'];
 const TEST_BOT_NAME = 'Eary Test Bot';
-const notifyUser = detail => window.dispatchEvent(new CustomEvent('eary:toast', { detail }));
+const MAX_CHAT_MESSAGE_CHARS = 700;
+const MAX_VOICE_MESSAGE_CHARS = MAX_CHAT_MESSAGE_CHARS;
+const limitChatMessageText = text => String(text || '').trim().slice(0, MAX_CHAT_MESSAGE_CHARS).trim();
 
 const getTestBotReply = text => {
     const normalized = text.toLocaleLowerCase('tr-TR');
@@ -79,7 +81,6 @@ const shouldShowSpeechModal = errorText => {
     const errorStr = String(errorText || '').toLowerCase();
     if (!errorStr) return false;
     if (errorStr.includes('izin reddedildi') || errorStr.includes('permission denied') || errorStr.includes('not authorized')) return true;
-    if (errorStr.includes('offline_pack_missing') || errorStr.includes('language pack')) return true;
     return Capacitor.getPlatform() !== 'ios';
 };
 
@@ -102,10 +103,6 @@ const TRANSLATIONS = {
         testAlertBody: 'Bildirim sistemi başarıyla çalışıyor! 🎉',
         newMessage: 'Yeni Mesaj - ',
         inputPlaceholder: 'Konuşamadığınızda el ile yazın...',
-        errOfflineTitle: 'Çevrimdışı Dil Paketi Eksik',
-        errOfflineBody: 'Cihazınızda seçili dile ait çevrimdışı ses paketi yüklü görünmüyor. Google ses tanıma motorunun arka planda çalışabilmesi için dili indirmeniz gerekir.',
-        errOfflineBtn: 'Ses Ayarlarını Aç',
-        errOfflineClose: 'Tamam',
         castTabWireless: 'Kablosuz TV',
         castTabQRCode: 'QR Kod Tarat',
         castTabPinCode: 'KOD ile Eşleştir',
@@ -128,19 +125,17 @@ export default function IntercomInterface({ roomData, onLeave, language = 'tr-TR
     const { roomId, nickname } = roomData;
     const isTestBotRoom = Boolean(roomData.isTestBot);
     const [messages, setMessages] = useState([]);
+    const [messagesReady, setMessagesReady] = useState(false);
     const messagesRef = useRef([]);
     const faceStateRef = useRef({ splitScreenEnabled: false, faceSessionActive: false, faceSessionStartedAt: 0 });
     const [roomMembers, setRoomMembers] = useState([]);
     const [isListening, setIsListening] = useState(false);
-    const [isSpeechStarting, setIsSpeechStarting] = useState(false);
+    const [, setIsSpeechStarting] = useState(false);
     const isListeningRef = useRef(false);
     const [interimText, setInterimText] = useState('');
     const [manualText, setManualText] = useState('');
     const [editingMessage, setEditingMessage] = useState(null);
     const [showEmojiPicker, setShowEmojiPicker] = useState(false);
-    const [isUploadingMedia, setIsUploadingMedia] = useState(false);
-    const [uploadProgress, setUploadProgress] = useState(0);
-    const [mediaViewer, setMediaViewer] = useState(null);
     const [forwardingMessage, setForwardingMessage] = useState(null);
     const [toast, setToast] = useState('');
     const [messageLimit, setMessageLimit] = useState(60);
@@ -150,12 +145,11 @@ export default function IntercomInterface({ roomData, onLeave, language = 'tr-TR
     });
     const [showScrollToBottom, setShowScrollToBottom] = useState(false);
     const [isChatViewportReady, setIsChatViewportReady] = useState(false);
+    const [hasPinnedInitialChat, setHasPinnedInitialChat] = useState(false);
     const scrollHintTimerRef = useRef(null);
     const scrollDragRef = useRef({ active: false, moved: false, y: 0, scrollTop: 0 });
-    const galleryInputRef = useRef(null);
-    const cameraInputRef = useRef(null);
     const manualInputRef = useRef(null);
-    
+
     const [isSidebarOpen, setIsSidebarOpen] = useState(false);
     const [sidebarSection] = useState('profile');
     const [account, setAccount] = useState(null);
@@ -180,7 +174,7 @@ export default function IntercomInterface({ roomData, onLeave, language = 'tr-TR
 
         const startVisualizer = async () => {
             if (!isListening) return;
-            
+
             if (Capacitor.isNativePlatform()) {
                 // On native platforms, simulate a sound wave animation using requestAnimationFrame
                 // to prevent audio hardware conflicts (getUserMedia blocks native speech recognition on Android).
@@ -227,7 +221,7 @@ export default function IntercomInterface({ roomData, onLeave, language = 'tr-TR
                 audioCtx = new AudioContextClass();
                 analyser = audioCtx.createAnalyser();
                 analyser.fftSize = 64;
-                
+
                 source = audioCtx.createMediaStreamSource(stream);
                 source.connect(analyser);
 
@@ -287,9 +281,9 @@ export default function IntercomInterface({ roomData, onLeave, language = 'tr-TR
     const [typingStatus, setTypingStatus] = useState(null);
     const [typingUsers, setTypingUsers] = useState({});
     // Dynamic languages and Translation states
-    const [speechLang, setSpeechLangState] = useState(() => localStorage.getItem('eary_speech_lang') || normalizeAppLanguage(language));
-    const [translationTargetLang, setTranslationTargetLang] = useState(() => localStorage.getItem('eary_translation_target_lang') || 'tr-TR');
-    const [topSpeechLang, setTopSpeechLang] = useState(() => localStorage.getItem('eary_top_speech_lang') || 'tr-TR');
+    const [speechLang, setSpeechLangState] = useState(() => normalizeAppLanguage(localStorage.getItem('eary_speech_lang') || language));
+    const [translationTargetLang, setTranslationTargetLangState] = useState(() => normalizeAppLanguage(localStorage.getItem('eary_translation_target_lang') || 'tr-TR'));
+    const [topSpeechLang, setTopSpeechLangState] = useState(() => normalizeAppLanguage(localStorage.getItem('eary_top_speech_lang') || 'tr-TR'));
     const [autoTranslate, setAutoTranslate] = useState(() => localStorage.getItem('eary_auto_translate') === 'true');
     const [showChatTranslationSettings, setShowChatTranslationSettings] = useState(false);
     const [splitScreenEnabled, setSplitScreenEnabled] = useState(false);
@@ -397,9 +391,6 @@ export default function IntercomInterface({ roomData, onLeave, language = 'tr-TR
             } else if (isParticipantsModalOpen) {
                 event.preventDefault();
                 setIsParticipantsModalOpen(false);
-            } else if (mediaViewer) {
-                event.preventDefault();
-                setMediaViewer(null);
             } else if (isSidebarOpen) {
                 event.preventDefault();
                 setIsSidebarOpen(false);
@@ -407,7 +398,7 @@ export default function IntercomInterface({ roomData, onLeave, language = 'tr-TR
         };
         window.addEventListener('eary:back', handleBack);
         return () => window.removeEventListener('eary:back', handleBack);
-    }, [faceSessionActive, isParticipantsModalOpen, isSidebarOpen, mediaViewer, showFaceEnd, splitScreenEnabled]);
+    }, [faceSessionActive, isParticipantsModalOpen, isSidebarOpen, showFaceEnd, splitScreenEnabled]);
 
     // Scroll stabilization lock on room mount
     useEffect(() => {
@@ -447,6 +438,14 @@ export default function IntercomInterface({ roomData, onLeave, language = 'tr-TR
         setSpeechLangState(normalized);
         localStorage.setItem('eary_speech_lang', normalized);
         onLanguageChange?.(normalized);
+    };
+
+    const setTranslationTargetLang = nextLanguage => {
+        setTranslationTargetLangState(normalizeAppLanguage(nextLanguage));
+    };
+
+    const setTopSpeechLang = nextLanguage => {
+        setTopSpeechLangState(normalizeAppLanguage(nextLanguage));
     };
 
     useEffect(() => {
@@ -703,7 +702,7 @@ export default function IntercomInterface({ roomData, onLeave, language = 'tr-TR
     // Render group of reactions under a message bubble
     const renderMessageReactions = (msg) => {
         if (!msg.reactions) return null;
-        
+
         const reactionCounts = {};
         Object.entries(msg.reactions).forEach(([, emoji]) => {
             reactionCounts[emoji] = (reactionCounts[emoji] || 0) + 1;
@@ -768,7 +767,7 @@ export default function IntercomInterface({ roomData, onLeave, language = 'tr-TR
     useEffect(() => {
         if (!roomId || !nickname) return;
         const typingRef = ref(db, `rooms/${roomId}/typing/${nickname.replace(/[.$#[\]/]/g, '_')}`);
-        
+
         if (typingStatus) {
             set(typingRef, typingStatus).catch(e => console.error(e));
         } else {
@@ -804,7 +803,7 @@ export default function IntercomInterface({ roomData, onLeave, language = 'tr-TR
     const getTypingText = () => {
         const users = Object.keys(typingUsers);
         if (users.length === 0) return null;
-        
+
         const formattedUsers = users.map(user => {
             const status = typingUsers[user];
             const cleanName = user.split('_')[0] || user;
@@ -814,7 +813,7 @@ export default function IntercomInterface({ roomData, onLeave, language = 'tr-TR
                 return `${cleanName} yazıyor...`;
             }
         });
-        
+
         return formattedUsers.join(', ');
     };
     const typingText = getTypingText();
@@ -841,7 +840,6 @@ export default function IntercomInterface({ roomData, onLeave, language = 'tr-TR
                 const profileRef = ref(db, `users/${updatedAcc.username}/profile`);
                 await update(profileRef, {
                     nickname: updatedAcc.nickname,
-                    photo: updatedAcc.profile.photo,
                     bio: updatedAcc.profile.bio,
                     preference: updatedAcc.profile.preference,
                     languages: updatedAcc.profile.languages,
@@ -851,7 +849,6 @@ export default function IntercomInterface({ roomData, onLeave, language = 'tr-TR
                 await update(ref(db, `publicProfiles/${updatedAcc.username}`), {
                     username: updatedAcc.username,
                     nickname: updatedAcc.nickname,
-                    photo: updatedAcc.profile.privacy?.profilePhoto === 'everyone' ? (updatedAcc.profile.photo || '') : '',
                     bio: updatedAcc.profile.bio || '',
                     discoverable: updatedAcc.profile.privacy?.discoverByUsername !== 'nobody'
                 });
@@ -865,6 +862,15 @@ export default function IntercomInterface({ roomData, onLeave, language = 'tr-TR
                 console.error("Firebase Profile Update Error:", err);
             }
         }
+    };
+    const handleDeleteAccount = async () => {
+        if (!account?.username) throw new Error('Oturum bulunamadı.');
+        const usernameClean = account.username.trim().toLowerCase();
+        await update(ref(db), {
+            [`users/${usernameClean}/profile`]: null,
+            [`publicProfiles/${usernameClean}`]: null
+        });
+        await handleLogout();
     };
 
     const handleExplicitLeave = async () => {
@@ -892,10 +898,9 @@ export default function IntercomInterface({ roomData, onLeave, language = 'tr-TR
         const presenceBaseKey = presenceUsername || presenceName;
         const presenceKey = `${presenceBaseKey.replace(/[.$#[\]/]/g, '_')}_${deviceId}`;
         const presenceRef = ref(db, `rooms/${roomId}/presence/${presenceKey}`);
-        
+
         const presencePayload = () => ({
             nickname: presenceName, role: 'intercom', active: true,
-            photo: account?.profile?.photo || '',
             username: presenceUsername,
             deviceId,
             lastActive: Date.now()
@@ -938,11 +943,10 @@ export default function IntercomInterface({ roomData, onLeave, language = 'tr-TR
                     .map(u => ({
                         nickname: u.nickname,
                         role: u.role,
-                        photo: u.photo || '',
                         username: u.username || '',
                         deviceId: u.deviceId || ''
                     }));
-                
+
                 // Remove duplicates by username/device first; nickname alone is not stable enough.
                 const uniqueMembers = [];
                 const seenMembers = new Set();
@@ -953,7 +957,7 @@ export default function IntercomInterface({ roomData, onLeave, language = 'tr-TR
                         uniqueMembers.push(m);
                     }
                 });
-                
+
                 setRoomMembers(uniqueMembers);
             } else {
                 setRoomMembers([]);
@@ -978,7 +982,7 @@ export default function IntercomInterface({ roomData, onLeave, language = 'tr-TR
     // Remote prompt listeners removed for UI simplification
 
 
-    
+
     // Bulk Selection State
     const [isSelectMode, setIsSelectMode] = useState(false);
     const [selectedIds, setSelectedIds] = useState([]);
@@ -1010,7 +1014,7 @@ export default function IntercomInterface({ roomData, onLeave, language = 'tr-TR
             }
         };
     }, []);
-    
+
     // Speech Recognition references
     const recognitionRef = useRef(null);
     const messagesEndRef = useRef(null);
@@ -1162,6 +1166,9 @@ export default function IntercomInterface({ roomData, onLeave, language = 'tr-TR
 
     // 2. Real-time Message Stream & Background Notification Dispatch
     useEffect(() => {
+        let active = true;
+        setMessagesReady(false);
+
         if (isTestBotRoom) {
             const savedMessages = JSON.parse(localStorage.getItem(`eary_test_bot_messages_${roomId}`) || '[]');
             const initialMessages = savedMessages.length ? savedMessages : [{
@@ -1176,18 +1183,20 @@ export default function IntercomInterface({ roomData, onLeave, language = 'tr-TR
                 senderLang: speechLang
             }];
             setMessages(initialMessages);
+            setMessagesReady(true);
             localStorage.setItem(`eary_test_bot_messages_${roomId}`, JSON.stringify(initialMessages));
             hasInitiated.current = true;
-            return undefined;
+            return () => { active = false; };
         }
 
         const applyMessageData = data => {
+            if (!active) return;
             if (data) {
                 const messageList = Object.keys(data).map(key => ({
                     id: key,
                     ...data[key]
                 }));
-                
+
                 // Sort by timestamp
                 messageList.sort((a, b) => a.timestamp - b.timestamp);
                 const cloudIds = new Set(messageList.map(message => message.id));
@@ -1206,12 +1215,12 @@ export default function IntercomInterface({ roomData, onLeave, language = 'tr-TR
                     if (newMsg.senderName !== nickname && (isAppBackground.current || alwaysNotify)) {
                         scheduleNotification(
                             `${text.newMessage}${newMsg.senderName}`,
-                            newMsg.text || (newMsg.mediaType === 'video' ? 'Video gönderdi' : 'Fotoğraf gönderdi'),
+                            newMsg.text || 'Yeni mesaj',
                             Math.floor(Math.random() * 100000),
                             { roomId }
                         );
                     }
-                    
+
                     // Simple accessibility vibration for incoming message (if device supports it)
                     if ('vibrate' in navigator && newMsg.senderName !== nickname) {
                         navigator.vibrate([150, 100, 150]);
@@ -1231,9 +1240,11 @@ export default function IntercomInterface({ roomData, onLeave, language = 'tr-TR
                 });
 
                 setMessages(messageList);
+                setMessagesReady(true);
                 hasInitiated.current = true;
             } else {
                 setMessages([]);
+                setMessagesReady(true);
                 hasInitiated.current = true;
             }
         };
@@ -1253,12 +1264,14 @@ export default function IntercomInterface({ roomData, onLeave, language = 'tr-TR
                 applyMessageData(Object.fromEntries(recentEntries));
             } catch (messageError) {
                 console.error('Message refresh failed:', messageError);
+                if (active) setMessagesReady(true);
             }
         };
         refreshMessages();
         const refreshInterval = setInterval(refreshMessages, 1500);
 
         return () => {
+            active = false;
             unsubscribe();
             clearInterval(refreshInterval);
         };
@@ -1281,18 +1294,31 @@ export default function IntercomInterface({ roomData, onLeave, language = 'tr-TR
     useEffect(() => {
         shouldAutoScrollRef.current = true;
         setIsChatViewportReady(false);
+        setHasPinnedInitialChat(false);
         setShowScrollToBottom(false);
         pinChatToBottom();
         const frame = requestAnimationFrame(() => {
             pinChatToBottom();
-            setIsChatViewportReady(true);
         });
         return () => cancelAnimationFrame(frame);
     }, [pinChatToBottom, roomId]);
 
+    useLayoutEffect(() => {
+        if (!messagesReady) return;
+        if (splitScreenEnabled || isSelectMode || hasPinnedInitialChat) return;
+        if (!messages.length) {
+            setIsChatViewportReady(true);
+            setHasPinnedInitialChat(true);
+            return;
+        }
+        pinChatToBottom();
+        setIsChatViewportReady(true);
+        setHasPinnedInitialChat(true);
+    }, [hasPinnedInitialChat, isSelectMode, messages.length, messagesReady, pinChatToBottom, splitScreenEnabled]);
+
     // Scroll to bottom on new message
     useEffect(() => {
-        if (!isSelectMode && shouldAutoScrollRef.current && messages.length > 0) {
+        if (!isSelectMode && hasPinnedInitialChat && shouldAutoScrollRef.current && messages.length > 0) {
             pinChatToBottom();
             const frame = requestAnimationFrame(pinChatToBottom);
             const settleTimer = setTimeout(pinChatToBottom, 180);
@@ -1304,12 +1330,13 @@ export default function IntercomInterface({ roomData, onLeave, language = 'tr-TR
             };
         }
         return undefined;
-    }, [messages, isSelectMode, pinChatToBottom]);
+    }, [messages, isSelectMode, hasPinnedInitialChat, pinChatToBottom]);
 
     // Translations increase bubble height after messages arrive. Keep the last
     // message anchored before paint so opening a translated chat never jumps.
     useLayoutEffect(() => {
-        if (splitScreenEnabled || isSelectMode || !shouldAutoScrollRef.current || !messages.length) {
+        if (!messagesReady) return;
+        if (splitScreenEnabled || isSelectMode || !hasPinnedInitialChat || !shouldAutoScrollRef.current || !messages.length) {
             if (!messages.length) setIsChatViewportReady(true);
             return;
         }
@@ -1327,7 +1354,7 @@ export default function IntercomInterface({ roomData, onLeave, language = 'tr-TR
             cancelAnimationFrame(frame);
             clearTimeout(settleTimer);
         };
-    }, [roomId, messages.length, translations, autoTranslate, splitScreenEnabled, isSelectMode, pinChatToBottom]);
+    }, [roomId, messages.length, messagesReady, translations, autoTranslate, splitScreenEnabled, isSelectMode, hasPinnedInitialChat, pinChatToBottom]);
 
     const handleChatScroll = () => {
         if (programmaticScrollTimerRef.current) return;
@@ -1422,8 +1449,11 @@ export default function IntercomInterface({ roomData, onLeave, language = 'tr-TR
     const speechSessionBaselinesRef = useRef([]);
 
     const setSpeechPreview = (value) => {
-        interimTextRef.current = value;
-        setInterimText(value);
+        const clean = String(value || '').replace(/\s+/g, ' ').trim();
+        const limited = clean.length > MAX_VOICE_MESSAGE_CHARS ? clean.slice(0, MAX_VOICE_MESSAGE_CHARS).trim() : clean;
+        interimTextRef.current = limited;
+        setInterimText(limited);
+        if (limited) lastCapturedTextRef.current = limited;
     };
 
     const clearSpeechPreview = () => {
@@ -1438,6 +1468,26 @@ export default function IntercomInterface({ roomData, onLeave, language = 'tr-TR
         ''
     ).trim();
 
+    const mergeSpeechTranscriptChunk = (previousText, nextText) => {
+        const previous = String(previousText || '').trim();
+        const next = String(nextText || '').trim();
+        if (!previous) return next;
+        if (!next) return previous;
+        if (next.startsWith(previous)) return next;
+        if (previous.endsWith(next)) return previous;
+
+        const previousWords = previous.split(/\s+/);
+        const nextWords = next.split(/\s+/);
+        const maxOverlap = Math.min(previousWords.length, nextWords.length);
+        for (let size = maxOverlap; size >= 1; size -= 1) {
+            const previousTail = previousWords.slice(-size).join(' ').toLocaleLowerCase('tr-TR');
+            const nextHead = nextWords.slice(0, size).join(' ').toLocaleLowerCase('tr-TR');
+            if (previousTail === nextHead) {
+                return [...previousWords, ...nextWords.slice(size)].join(' ').trim();
+            }
+        }
+        return `${previous} ${next}`.trim();
+    };
     const resetSpeechCapture = () => {
         lastCapturedTextRef.current = '';
         finalizedSpeechRef.current = '';
@@ -1492,7 +1542,7 @@ export default function IntercomInterface({ roomData, onLeave, language = 'tr-TR
 
     const normalizeSpeechWords = value => String(value || '')
         .toLocaleLowerCase('tr-TR')
-        .replace(/[^\p{L}\p{N}\s]/gu, ' ')
+        .replace(/[^A-Za-z0-9\u00C0-\u024F\u0100-\u017F\s]+/g, ' ')
         .trim()
         .split(/\s+/)
         .filter(Boolean);
@@ -1790,6 +1840,22 @@ export default function IntercomInterface({ roomData, onLeave, language = 'tr-TR
         }, 650);
     };
 
+    const getSpeechPersonalTerms = () => {
+        const recentNames = messagesRef.current
+            .slice(-40)
+            .flatMap(message => [message.senderName, message.senderUsername])
+            .filter(Boolean);
+        return extractPersonalTerms(
+            nickname,
+            account?.nickname,
+            account?.username,
+            roomData?.nickname,
+            roomData?.username,
+            roomData?.title,
+            ...recentNames
+        );
+    };
+
     // Dynamic Speech Recognition manager
     const getOrInitRecognizer = (lang, sessionToken = speechSessionRef.current) => {
         const isNativeSpeech = Capacitor.isNativePlatform();
@@ -1808,29 +1874,17 @@ export default function IntercomInterface({ roomData, onLeave, language = 'tr-TR
         const handleResult = (finalText, interimText) => {
             if (speechSessionRef.current !== sessionToken) return;
             if (ignoreSpeechResultsRef.current || speechStopSentRef.current) return;
-            const isNativeSpeech = Capacitor.isNativePlatform();
-            const isFaceSpeech = faceStateRef.current.splitScreenEnabled && faceStateRef.current.faceSessionActive;
-            const shouldReplaceSpeechBuffer = isNativeSpeech || isFaceSpeech;
             if (finalText.trim()) {
                 const chunk = finalText.trim();
-                const previous = finalizedSpeechRef.current.trim();
-                if (shouldReplaceSpeechBuffer) {
-                    finalizedSpeechRef.current = chunk;
-                } else if (previous && chunk.startsWith(previous)) {
-                    finalizedSpeechRef.current = chunk;
-                } else if (!previous.endsWith(chunk)) {
-                    finalizedSpeechRef.current = `${previous} ${chunk}`.trim();
-                }
-                const cleanedFinal = cleanSpeechCandidate(finalizedSpeechRef.current, speechOwnerRef.current);
-                lastCapturedTextRef.current = cleanedFinal;
-                setSpeechPreview(cleanedFinal);
+                finalizedSpeechRef.current = mergeSpeechTranscriptChunk(finalizedSpeechRef.current, chunk);
+                const rawFinal = finalizedSpeechRef.current.slice(0, MAX_VOICE_MESSAGE_CHARS).trim();
+                lastCapturedTextRef.current = rawFinal;
+                setSpeechPreview(rawFinal);
             } else if (interimText.trim()) {
-                const preview = shouldReplaceSpeechBuffer
-                    ? interimText.trim()
-                    : `${finalizedSpeechRef.current} ${interimText.trim()}`.trim();
-                const cleanedPreview = cleanSpeechCandidate(preview, speechOwnerRef.current);
-                setSpeechPreview(cleanedPreview);
-                lastCapturedTextRef.current = cleanedPreview;
+                const preview = mergeSpeechTranscriptChunk(finalizedSpeechRef.current, interimText.trim());
+                const rawPreview = preview.slice(0, MAX_VOICE_MESSAGE_CHARS).trim();
+                setSpeechPreview(rawPreview);
+                lastCapturedTextRef.current = rawPreview;
             }
         };
 
@@ -1852,6 +1906,26 @@ export default function IntercomInterface({ roomData, onLeave, language = 'tr-TR
                 stopActiveStream();
                 return;
             }
+            if (isListeningRef.current) {
+                const pendingText = getPendingSpeechText();
+                if (pendingText) {
+                    finalizedSpeechRef.current = pendingText;
+                    lastCapturedTextRef.current = pendingText;
+                    setSpeechPreview(pendingText);
+                }
+                setIsListening(true);
+                const activeRecognizer = recognitionRef.current;
+                setTimeout(() => {
+                    if (!isListeningRef.current || ignoreSpeechResultsRef.current || speechStopSentRef.current) return;
+                    try {
+                        if (typeof activeRecognizer?.restart === 'function') activeRecognizer.restart();
+                        else activeRecognizer?.start?.();
+                    } catch (error) {
+                        console.warn('Speech recognition could not continue after pause:', error);
+                    }
+                }, 120);
+                return;
+            }
             const pendingText = getPendingSpeechText();
             setIsListening(false);
             clearSpeechPreview();
@@ -1871,18 +1945,15 @@ export default function IntercomInterface({ roomData, onLeave, language = 'tr-TR
             console.error("Speech Recognition Error:", e);
             setIsSpeechStarting(false);
             speechStartInFlightRef.current = false;
-            setIsListening(false);
-            clearSpeechPreview();
-            lastCapturedTextRef.current = '';
-            finalizedSpeechRef.current = '';
-            
             const errCode = e && (e.error || e.message) ? (e.error || e.message) : String(e || '');
             const errorStr = String(errCode).toLowerCase();
             if (
-                errorStr.includes("no match") || 
-                errorStr.includes("no_match") || 
-                errorStr.includes("no speech") || 
+                errorStr.includes("no match") ||
+                errorStr.includes("no_match") ||
+                errorStr.includes("no speech") ||
                 errorStr.includes("no_speech") ||
+                errorStr.includes("konuşma algılanamadı") ||
+                errorStr.includes("konusma algilanamadi") ||
                 errorStr.includes("aborted") ||
                 errorStr.includes("7") ||
                 errorStr.includes("busy") ||
@@ -1890,8 +1961,13 @@ export default function IntercomInterface({ roomData, onLeave, language = 'tr-TR
                 errorStr.includes("cancelled") ||
                 errorStr.includes("canceled")
             ) {
+                if (isListeningRef.current) setIsListening(true);
                 return;
             }
+            setIsListening(false);
+            clearSpeechPreview();
+            lastCapturedTextRef.current = '';
+            finalizedSpeechRef.current = '';
 
             if (!shouldShowSpeechModal(errCode)) {
                 if (isTestBotRoom) {
@@ -1902,11 +1978,7 @@ export default function IntercomInterface({ roomData, onLeave, language = 'tr-TR
                 return;
             }
 
-            if (errorStr.includes("13") || errorStr.includes("language pack") || errorStr.includes("locale")) {
-                setSpeechError("offline_pack_missing");
-            } else {
-                setSpeechError(errCode);
-            }
+            setSpeechError(errCode);
         };
 
         const rec = getDuoSpeechRecognizer(lang, handleResult, handleEnd, handleError);
@@ -1968,7 +2040,10 @@ export default function IntercomInterface({ roomData, onLeave, language = 'tr-TR
             return;
         } else {
             speechStartInFlightRef.current = true;
-            setIsSpeechStarting(true);
+            setIsSpeechStarting(false);
+            isListeningRef.current = true;
+            setIsListening(true);
+            playBeep('start');
             setActiveRecognitionLang(actualLang);
             const sessionToken = speechSessionRef.current + 1;
             speechSessionRef.current = sessionToken;
@@ -1976,7 +2051,6 @@ export default function IntercomInterface({ roomData, onLeave, language = 'tr-TR
             speechSessionBaselinesRef.current = buildSpeechSessionBaselines(speechOwnerRef.current);
             resetSpeechSessionBuffers();
             const shouldResetRecognizerBeforeStart = Capacitor.isNativePlatform() || (splitScreenEnabled && faceSessionActive);
-            setSpeechPreview('Mikrofon hazırlanıyor...');
             if (shouldResetRecognizerBeforeStart) {
                 try {
                     recognitionRef.current?.abort?.();
@@ -1988,18 +2062,19 @@ export default function IntercomInterface({ roomData, onLeave, language = 'tr-TR
             try {
                 const freshRec = getOrInitRecognizer(actualLang, sessionToken);
                 if (!freshRec) {
-                    notifyUser('Bu cihazda konuşma tanıma desteklenmiyor.');
+                    alert("Speech recognition is not supported on this browser/device.");
                     speechStartInFlightRef.current = false;
                     setIsSpeechStarting(false);
+                    isListeningRef.current = false;
+                    setIsListening(false);
                     return;
                 }
+                isListeningRef.current = true;
+                setIsListening(true);
                 await freshRec.start();
                 speechStartInFlightRef.current = false;
                 setIsSpeechStarting(false);
-                isListeningRef.current = true;
-                setIsListening(true);
-                if (interimTextRef.current === 'Mikrofon hazırlanıyor...') clearSpeechPreview();
-                playBeep('start');
+
             } catch (error) {
                 speechStartInFlightRef.current = false;
                 setIsSpeechStarting(false);
@@ -2046,9 +2121,16 @@ export default function IntercomInterface({ roomData, onLeave, language = 'tr-TR
     };
 
     const sendMessageToCloud = async (msgText, isVoice = false, msgLang = speechLang, options = {}) => {
-        if (!msgText.trim()) return;
+        const limitedMessageText = limitChatMessageText(msgText);
+        if (!limitedMessageText) return;
         const shouldCorrect = options.shouldCorrect ?? isVoice;
-        const correctedText = shouldCorrect ? correctTranscription(msgText.trim(), msgLang) : msgText.trim();
+        const personalTerms = shouldCorrect ? getSpeechPersonalTerms() : [];
+        if (personalTerms.length) rememberPersonalTerms(personalTerms);
+        const correctedText = shouldCorrect ? limitChatMessageText(correctTranscription(limitedMessageText, msgLang, {
+            context: options.transcriptContext || (options.speechOwner ? 'face' : 'chat'),
+            finalize: true,
+            personalTerms
+        })) : limitedMessageText;
         if (!correctedText.trim()) return;
         const normalizedOutboundText = correctedText.trim().replace(/\s+/g, ' ').toLocaleLowerCase('tr-TR');
         const lastOutbound = lastOutboundMessageRef.current;
@@ -2147,6 +2229,10 @@ export default function IntercomInterface({ roomData, onLeave, language = 'tr-TR
                     [`rooms/${roomId}/messages/${payload.id}`]: {
                         ...cloudPayload,
                         status: 'sent'
+                    },
+                    [`rooms/${roomId}/lastMessage`]: {
+                        ...payload,
+                        status: 'sent'
                     }
                 });
                 delete pendingLocalMessagesRef.current[payload.id];
@@ -2189,6 +2275,10 @@ export default function IntercomInterface({ roomData, onLeave, language = 'tr-TR
                 [`rooms/${roomId}/messages/${payload.id}`]: {
                     ...cloudPayload,
                     status: 'sent'
+                },
+                [`rooms/${roomId}/lastMessage`]: {
+                    ...payload,
+                    status: 'sent'
                 }
             });
             delete pendingLocalMessagesRef.current[payload.id];
@@ -2202,7 +2292,7 @@ export default function IntercomInterface({ roomData, onLeave, language = 'tr-TR
     };
 
     const submitManualMessage = async () => {
-        const messageText = manualText.trim();
+        const messageText = limitChatMessageText(manualText);
         if (!messageText || manualSubmitLockRef.current) return;
         manualSubmitLockRef.current = true;
         setManualText('');
@@ -2234,126 +2324,20 @@ export default function IntercomInterface({ roomData, onLeave, language = 'tr-TR
         submitManualMessage();
     };
 
-    const compressImage = async (file) => {
-        if (!file.type.startsWith('image/') || file.type === 'image/gif' || file.size < 800 * 1024) return file;
-        try {
-            const bitmap = await createImageBitmap(file);
-            const ratio = Math.min(1, 1600 / Math.max(bitmap.width, bitmap.height));
-            const canvas = document.createElement('canvas');
-            canvas.width = Math.round(bitmap.width * ratio);
-            canvas.height = Math.round(bitmap.height * ratio);
-            canvas.getContext('2d').drawImage(bitmap, 0, 0, canvas.width, canvas.height);
-            const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/jpeg', 0.82));
-            bitmap.close();
-            return blob ? new File([blob], file.name.replace(/\.[^.]+$/, '.jpg'), { type: 'image/jpeg' }) : file;
-        } catch (error) {
-            console.warn('Image compression skipped:', error);
-            return file;
-        }
-    };
-
-    const fileToDataUrl = file => new Promise((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onload = () => resolve(reader.result);
-        reader.onerror = reject;
-        reader.readAsDataURL(file);
-    });
-
-    const writeMediaMessage = async ({ mediaUrl, mediaType, fileName }) => {
-        const messageRef = push(ref(db, `rooms/${roomId}/messages`));
-        await set(messageRef, {
-            senderName: nickname,
-            senderUsername: account?.username || roomData.username || '',
-            senderDeviceId: getDeviceId(),
-            text: '',
-            timestamp: Date.now(),
-            isVoice: false,
-            status: 'sent',
-            senderLang: speechLang,
-            mediaUrl,
-            mediaType,
-            fileName
-        });
-        await restoreMemberHistories();
-    };
-
-    const sendMediaMessage = async (originalFile) => {
-        const file = await compressImage(originalFile);
-        const isVideo = file.type.startsWith('video/');
-        try {
-            const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, '_');
-            const fileRef = storageRef(storage, `chatMedia/${roomId}/${Date.now()}-${safeName}`);
-            const uploadTask = uploadBytesResumable(fileRef, file, { contentType: file.type });
-            const snapshot = await new Promise((resolve, reject) => {
-                uploadTask.on('state_changed', current => {
-                    setUploadProgress(Math.round((current.bytesTransferred / current.totalBytes) * 100));
-                }, reject, () => resolve(uploadTask.snapshot));
-            });
-            const mediaUrl = await getDownloadURL(snapshot.ref);
-            await writeMediaMessage({ mediaUrl, mediaType: isVideo ? 'video' : 'image', fileName: originalFile.name });
-            return;
-        } catch (storageError) {
-            console.warn('Firebase Storage upload failed, trying inline image fallback:', storageError);
-            if (isVideo) throw storageError;
-        }
-
-        const inlineImage = await compressImage(file);
-        if (inlineImage.size > 2.5 * 1024 * 1024) {
-            throw new Error('Fotoğraf çok büyük. Daha küçük bir fotoğraf deneyin.');
-        }
-        const mediaUrl = await fileToDataUrl(inlineImage);
-        await writeMediaMessage({ mediaUrl, mediaType: 'image', fileName: originalFile.name });
-    };
-
-    const handleMediaFiles = async (event) => {
-        const cameraCapture = event.currentTarget === cameraInputRef.current;
-        const files = Array.from(event.target.files || []).map((file, index) => {
-            if (file.type) return file;
-            const extension = file.name?.split('.').pop()?.toLowerCase();
-            const inferredType = cameraCapture || ['jpg', 'jpeg', 'png', 'heic', 'webp'].includes(extension)
-                ? (extension === 'png' ? 'image/png' : extension === 'webp' ? 'image/webp' : 'image/jpeg')
-                : ['mp4', 'mov', 'webm'].includes(extension) ? `video/${extension === 'mov' ? 'quicktime' : extension}` : '';
-            return inferredType ? new File([file], file.name || `kamera-${Date.now()}-${index}.jpg`, { type: inferredType, lastModified: file.lastModified }) : file;
-        });
-        event.target.value = '';
-        if (files.length === 0) return;
-
-        const allowedFiles = files.filter(file => (
-            file.type.startsWith('image/') || file.type.startsWith('video/')
-        ));
-
-        if (allowedFiles.length === 0) {
-            setToast('Seçilen kamera dosyası okunamadı');
-            setTimeout(() => setToast(''), 2200);
-            return;
-        }
-
-        if (allowedFiles.some(file => file.size > 25 * 1024 * 1024)) {
-            setToast('Fotoğraf veya video en fazla 25 MB olabilir');
-            setTimeout(() => setToast(''), 2200);
-            return;
-        }
-
-        setIsUploadingMedia(true);
-        setUploadProgress(0);
-        try {
-            for (const file of allowedFiles) {
-                await sendMediaMessage(file);
-            }
-            shouldAutoScrollRef.current = true;
-            setToast('Medya gönderildi');
-            setTimeout(() => setToast(''), 1800);
-        } catch (error) {
-            console.error('Media upload failed:', error);
-            const message = error?.message?.includes('çok büyük')
-                ? error.message
-                : 'Medya gönderilemedi. Storage iznini kontrol edin.';
-            setToast(message);
-            setTimeout(() => setToast(''), 2800);
-        } finally {
-            setIsUploadingMedia(false);
-            setUploadProgress(0);
-        }
+    const writeRoomLastMessage = async (targetRoomId, message) => {
+        const previewPayload = {
+            id: message.id,
+            senderName: message.senderName,
+            senderUsername: message.senderUsername || '',
+            senderDeviceId: message.senderDeviceId || '',
+            text: message.text || '',
+            timestamp: message.timestamp || Date.now(),
+            isVoice: Boolean(message.isVoice),
+            status: message.status || 'sent',
+            senderLang: message.senderLang || speechLang,
+            forwarded: Boolean(message.forwarded)
+        };
+        await updateRest({ [`rooms/${targetRoomId}/lastMessage`]: previewPayload });
     };
 
     const appendEmoji = (emoji) => {
@@ -2366,7 +2350,7 @@ export default function IntercomInterface({ roomData, onLeave, language = 'tr-TR
     const triggerTestNotification = async () => {
         const granted = await requestNotificationPermission();
         if (!granted) {
-            notifyUser('Bildirim izni kapalı. Telefon ayarlarından Eary bildirimlerini açın.');
+            alert("Bildirim izni etkin değil! Bildirimleri alabilmek için lütfen telefonunuzun uygulama ayarlarından bildirim izinlerini açın.");
         }
         scheduleNotification(text.testAlertTitle, text.testAlertBody);
     };
@@ -2382,7 +2366,7 @@ export default function IntercomInterface({ roomData, onLeave, language = 'tr-TR
 
     const executeBulkDelete = () => {
         if (selectedIds.length === 0) return;
-        
+
         selectedIds.forEach((msgId) => {
             const itemRef = ref(db, `rooms/${roomId}/messages/${msgId}`);
             remove(itemRef).catch(e => console.error("Remove Error:", e));
@@ -2392,7 +2376,7 @@ export default function IntercomInterface({ roomData, onLeave, language = 'tr-TR
         setIsSelectMode(false);
     };
 
-    const getMessageShareText = (msg) => msg.text || msg.mediaUrl || '';
+    const getMessageShareText = (msg) => msg.text || '';
 
     const copyMessage = async (msg) => {
         const content = getMessageShareText(msg);
@@ -2422,18 +2406,21 @@ export default function IntercomInterface({ roomData, onLeave, language = 'tr-TR
     const forwardToRoom = async (targetRoomId) => {
         if (!forwardingMessage) return;
         const targetRef = push(ref(db, `rooms/${targetRoomId}/messages`));
-        await set(targetRef, {
+        const payload = {
+            id: targetRef.key,
             senderName: nickname,
+            senderUsername: account?.username || roomData.username || '',
             senderDeviceId: getDeviceId(),
             text: forwardingMessage.text || '',
             timestamp: Date.now(),
             status: 'sent',
             senderLang: speechLang,
-            mediaUrl: forwardingMessage.mediaUrl || null,
-            mediaType: forwardingMessage.mediaType || null,
-            fileName: forwardingMessage.fileName || null,
             forwarded: true
-        });
+        };
+        const cloudPayload = { ...payload };
+        delete cloudPayload.id;
+        await set(targetRef, cloudPayload);
+        await writeRoomLastMessage(targetRoomId, payload);
         setForwardingMessage(null);
         setToast('Mesaj iletildi');
         setTimeout(() => setToast(''), 1800);
@@ -2443,7 +2430,7 @@ export default function IntercomInterface({ roomData, onLeave, language = 'tr-TR
         if (!forwardingMessage) return;
         try {
             if (navigator.share) {
-                await navigator.share({ title: 'Eary mesajı', text: forwardingMessage.text || undefined, url: forwardingMessage.mediaUrl || undefined });
+                await navigator.share({ title: 'Eary mesajı', text: forwardingMessage.text || undefined });
             } else {
                 await copyMessage(forwardingMessage);
             }
@@ -2511,7 +2498,7 @@ export default function IntercomInterface({ roomData, onLeave, language = 'tr-TR
                 ))}
             </div>
             <button type="button" onClick={() => {
-                setReplyToMsg({ id: msg.id, text: msg.text || 'Medya', senderName: msg.senderName });
+                setReplyToMsg({ id: msg.id, text: msg.text || 'Mesaj', senderName: msg.senderName });
                 setEditingMessage(null);
                 setActiveMessageMenuId(null);
                 setTimeout(() => manualInputRef.current?.focus(), 0);
@@ -2592,7 +2579,7 @@ export default function IntercomInterface({ roomData, onLeave, language = 'tr-TR
                             faceMessages.map((msg) => {
                                 const isSelf = msg.senderName === nickname;
                                 return (
-                                    <div 
+                                    <div
                                         key={msg.id}
                                         style={{ overflowAnchor: 'none' }}
                                         onPointerDown={(event) => handlePressStart(event, msg)}
@@ -2607,11 +2594,11 @@ export default function IntercomInterface({ roomData, onLeave, language = 'tr-TR
                                                 <span className="text-[10px] text-[#8A7E9F] font-semibold tracking-wider mb-1 px-1">
                                                     {msg.senderName}
                                                 </span>
-                                                <div 
+                                                <div
                                                     onClick={(event) => handleMessageClick(event, msg.id)}
                                                     className={`px-3 py-2 rounded-2xl text-xs leading-relaxed cursor-pointer relative shadow-sm ${
-                                                        isSelf 
-                                                            ? 'bg-[#D9FDD3] text-[#17351F] rounded-tl-none border border-[#B8E6B1]/80 shadow-sm' 
+                                                        isSelf
+                                                            ? 'bg-[#D9FDD3] text-[#17351F] rounded-tl-none border border-[#B8E6B1]/80 shadow-sm'
                                                             : 'bg-white text-[#2D1F47] rounded-tr-none border border-[#E6DFF0] shadow-sm'
                                                     }`}
                                                 >
@@ -2628,12 +2615,6 @@ export default function IntercomInterface({ roomData, onLeave, language = 'tr-TR
                                                         </div>
                                                     )}
 
-                                                    {msg.mediaUrl && msg.mediaType === 'image' && (
-                                                        <img onClick={() => setMediaViewer(msg)} src={msg.mediaUrl} alt={msg.fileName || 'Gönderilen fotoğraf'} className="max-h-72 w-full cursor-zoom-in rounded-xl object-cover" />
-                                                    )}
-                                                    {msg.mediaUrl && msg.mediaType === 'video' && (
-                                                        <video src={msg.mediaUrl} controls playsInline className="max-h-72 w-full rounded-xl bg-black" />
-                                                    )}
                                                     {msg.text && <p style={{ fontSize: `${chatFontSize}px` }} className="font-medium">{msg.text}</p>}
                                                     {msg.editedAt && <span className="mt-1 block text-[9px] italic opacity-60">düzenlendi</span>}
                                                     {autoTranslate && topTranslations[msg.id] && (
@@ -2696,14 +2677,14 @@ export default function IntercomInterface({ roomData, onLeave, language = 'tr-TR
                                 <p className="text-xs text-[#2D1F47] italic">{interimText}</p>
                             </div>
                         )}
-                        
+
                         <button
                             type="button"
                             onPointerDown={(event) => handleFaceMicPress(event, 'guest', topSpeechLang)}
                             onClick={(event) => handleFaceMicPress(event, 'guest', topSpeechLang)}
                             className={`p-3.5 rounded-full transition-all active:scale-90 flex items-center justify-center cursor-pointer relative ${
                                 guestListening
-                                    ? 'bg-rose-600 text-white shadow-lg shadow-rose-600/30' 
+                                    ? 'bg-rose-600 text-white shadow-lg shadow-rose-600/30'
                                     : 'bg-[#7B52AB] hover:bg-[#663F93] text-white shadow-md'
                             }`}
                         >
@@ -2756,7 +2737,7 @@ export default function IntercomInterface({ roomData, onLeave, language = 'tr-TR
                             faceMessages.map((msg) => {
                                 const isSelf = msg.senderName === nickname;
                                 return (
-                                    <div 
+                                    <div
                                         key={msg.id}
                                         style={{ overflowAnchor: 'none' }}
                                         onPointerDown={(event) => handlePressStart(event, msg)}
@@ -2771,11 +2752,11 @@ export default function IntercomInterface({ roomData, onLeave, language = 'tr-TR
                                                 <span className="text-[10px] text-[#8A7E9F] font-semibold tracking-wider mb-1 px-1">
                                                     {msg.senderName}
                                                 </span>
-                                                <div 
+                                                <div
                                                     onClick={(event) => handleMessageClick(event, msg.id)}
                                                     className={`px-3 py-2 rounded-2xl text-xs leading-relaxed cursor-pointer relative shadow-sm ${
-                                                        isSelf 
-                                                            ? 'bg-[#D9FDD3] text-[#17351F] rounded-tr-none border border-[#B8E6B1]/80 shadow-sm' 
+                                                        isSelf
+                                                            ? 'bg-[#D9FDD3] text-[#17351F] rounded-tr-none border border-[#B8E6B1]/80 shadow-sm'
                                                             : 'bg-[#F7F3FA] text-[#2D1F47] rounded-tl-none border border-[#E6DFF0] shadow-sm'
                                                     }`}
                                                 >
@@ -2792,12 +2773,6 @@ export default function IntercomInterface({ roomData, onLeave, language = 'tr-TR
                                                         </div>
                                                     )}
 
-                                                    {msg.mediaUrl && msg.mediaType === 'image' && (
-                                                        <img onClick={() => setMediaViewer(msg)} src={msg.mediaUrl} alt={msg.fileName || 'Gönderilen fotoğraf'} className="max-h-72 w-full cursor-zoom-in rounded-xl object-cover" />
-                                                    )}
-                                                    {msg.mediaUrl && msg.mediaType === 'video' && (
-                                                        <video src={msg.mediaUrl} controls playsInline className="max-h-72 w-full rounded-xl bg-black" />
-                                                    )}
                                                     {msg.text && <p style={{ fontSize: `${chatFontSize}px` }} className="font-medium">{msg.text}</p>}
                                                     {msg.editedAt && <span className="mt-1 block text-[9px] italic opacity-60">düzenlendi</span>}
                                                     {!isSelf && autoTranslate && translations[msg.id] && (
@@ -2860,7 +2835,7 @@ export default function IntercomInterface({ roomData, onLeave, language = 'tr-TR
                                 <p className="text-xs text-[#2D1F47] italic">{interimText}</p>
                             </div>
                         )}
-                        
+
                         {/* Quoted Message Preview in Splitscreen */}
                         {editingMessage && (
                             <div className="flex items-center justify-between p-2 bg-[#F4F0F8] border-l-4 border-emerald-500 rounded-r-lg text-[10px] shrink-0">
@@ -2876,7 +2851,7 @@ export default function IntercomInterface({ roomData, onLeave, language = 'tr-TR
                                     <span className="font-extrabold text-[#7B52AB] block">Cevaplanan: {replyToMsg.senderName}</span>
                                     <span className="text-[#8A7E9F] truncate block font-semibold">{replyToMsg.text}</span>
                                 </div>
-                                <button 
+                                <button
                                     type="button"
                                     onClick={() => setReplyToMsg(null)}
                                     className="p-1 hover:bg-[#EBE5F7] text-[#8A7E9F] hover:text-[#7B52AB] rounded-full transition-all shrink-0 cursor-pointer"
@@ -2888,7 +2863,7 @@ export default function IntercomInterface({ roomData, onLeave, language = 'tr-TR
 
                         <div className="flex gap-1.5 overflow-x-auto pb-1">{FACE_TO_FACE_PHRASES.map(phrase => <button key={phrase} type="button" onClick={() => sendQuickPhrase(phrase)} className="shrink-0 rounded-full border border-[#DCD0EC] bg-[#FAF8F5] px-3 py-1.5 text-[9px] font-bold text-[#5F4B7A]">{phrase}</button>)}</div>
                         <form onSubmit={handleManualSubmit} className="flex gap-2">
-                            <input 
+                            <input
                                 ref={manualInputRef}
                                 type="text"
                                 value={manualText}
@@ -2900,7 +2875,7 @@ export default function IntercomInterface({ roomData, onLeave, language = 'tr-TR
                                 className="flex-1 bg-white border border-[#DCD0EC] rounded-xl px-3 py-1.5 text-xs text-[#2D1F47] focus:outline-none focus:border-[#7B52AB]"
                             />
                             <button type="button" onClick={() => speakText(manualText)} disabled={!manualText.trim()} className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-[#DCD0EC] bg-[#FAF8F5] text-[#7B52AB] disabled:opacity-35" title="Metni sesli oku"><Volume2 size={16} /></button>
-                            <button 
+                            <button
                                 type="button"
                                 onTouchStart={handleManualSendPress}
                                 onMouseDown={handleManualSendPress}
@@ -2920,7 +2895,7 @@ export default function IntercomInterface({ roomData, onLeave, language = 'tr-TR
                                 onClick={(event) => handleFaceMicPress(event, 'host', speechLang)}
                             className={`p-3.5 rounded-full transition-all active:scale-90 flex items-center justify-center cursor-pointer relative ${
                                     hostListening
-                                        ? 'bg-rose-600 text-white shadow-lg shadow-rose-600/30' 
+                                        ? 'bg-rose-600 text-white shadow-lg shadow-rose-600/30'
                                         : 'bg-[#7B52AB] hover:bg-[#663F93] text-white shadow-md'
                                 }`}
                             >
@@ -2989,7 +2964,7 @@ export default function IntercomInterface({ roomData, onLeave, language = 'tr-TR
                 <header className="eary-chat-safe-header eary-shell border-b eary-line px-4 pb-3">
                     <div className="grid min-h-[56px] grid-cols-[48px_minmax(0,1fr)_88px] items-center gap-2">
                         <div className="flex items-center justify-start">
-                            <button 
+                            <button
                                 type="button"
                                 onClick={handleExplicitLeave}
                                 onTouchEnd={(event) => {
@@ -3005,7 +2980,7 @@ export default function IntercomInterface({ roomData, onLeave, language = 'tr-TR
 
                         {/* Interactive Header: Click to view participants */}
                         <div className="min-w-0">
-                            <div 
+                            <div
                                 onClick={() => setIsParticipantsModalOpen(true)}
                                 className="eary-row flex min-w-0 cursor-pointer select-none items-center gap-2 rounded-lg px-1 py-1 transition-all"
                                 title="Grup Bilgisi ve Katılımcılar"
@@ -3029,14 +3004,7 @@ export default function IntercomInterface({ roomData, onLeave, language = 'tr-TR
                                             'bg-cyan-500/10 text-cyan-600'
                                         ];
                                         const colorClass = colors[(member.nickname?.length || 0) % colors.length];
-                                        return member.photo ? (
-                                            <img
-                                                key={idx}
-                                                src={member.photo}
-                                                alt={member.nickname}
-                                                className="inline-block h-8 w-8 rounded-full object-cover ring-2 ring-[var(--surface)]"
-                                            />
-                                        ) : (
+                                        return (
                                             <div
                                                 key={idx}
                                                 className={`inline-flex h-8 w-8 items-center justify-center rounded-full text-xs font-extrabold ring-2 ring-[var(--surface)] ${colorClass}`}
@@ -3079,7 +3047,7 @@ export default function IntercomInterface({ roomData, onLeave, language = 'tr-TR
                                 <Languages size={18} />
                             </button>
                             {/* Menu/Settings button to open Sidebar */}
-                            <button 
+                            <button
                                 type="button"
                                 onClick={() => {
                                     setIsParticipantsModalOpen(true);
@@ -3089,7 +3057,7 @@ export default function IntercomInterface({ roomData, onLeave, language = 'tr-TR
                             >
                                 <Menu size={18} />
                             </button>
-                            
+
                         </div>
                     </div>
                 </header>
@@ -3134,15 +3102,17 @@ export default function IntercomInterface({ roomData, onLeave, language = 'tr-TR
                 onPointerCancel={stopChatPointerDrag}
                 onPointerLeave={stopChatPointerDrag}
                 className="eary-soft min-h-0 flex-1 touch-pan-y overflow-y-auto overscroll-contain px-3 py-3"
-                style={{ WebkitOverflowScrolling: 'touch', touchAction: 'pan-y' }}
+                style={{ WebkitOverflowScrolling: 'touch', touchAction: 'pan-y', overflowAnchor: 'none' }}
             >
-                <div className={`flex min-h-full flex-col justify-end gap-3 ${isChatViewportReady ? 'opacity-100' : 'opacity-0'}`}>
+                <div className={`flex min-h-full flex-col justify-end gap-3 ${isChatViewportReady ? 'opacity-100' : 'opacity-0'}`} style={{ overflowAnchor: 'none' }}>
                     {messages.length >= messageLimit && (
                         <div className="flex justify-center pb-1">
                             <button type="button" onClick={() => setMessageLimit(limit => limit + 60)} className="eary-shell eary-muted rounded-full border eary-line px-4 py-1.5 text-[10px] font-semibold shadow-sm">Daha eski mesajları yükle</button>
                         </div>
                     )}
-                    {messages.length === 0 ? (
+                    {!messagesReady ? (
+                        <div className="min-h-full" />
+                    ) : messages.length === 0 ? (
                         <div className="flex min-h-full items-center justify-center p-6 text-center">
                             <p className="text-sm font-light leading-relaxed text-slate-500">
                                 {text.noMessages}
@@ -3155,7 +3125,7 @@ export default function IntercomInterface({ roomData, onLeave, language = 'tr-TR
                         const isSelected = selectedIds.includes(msg.id);
 
                         return (
-                            <div 
+                            <div
                                 key={msg.id}
                                 onClick={() => isSelectMode && toggleSelectMessage(msg.id)}
                                 onPointerDown={(event) => handlePressStart(event, msg)}
@@ -3177,12 +3147,12 @@ export default function IntercomInterface({ roomData, onLeave, language = 'tr-TR
                                             {msg.senderName}
                                         </span>
                                         {/* Message Bubble */}
-                                        <div 
+                                        <div
                                             data-message-bubble
                                             onClick={(event) => handleMessageClick(event, msg.id)}
                                             className={`px-4 py-3 rounded-2xl text-sm leading-relaxed cursor-pointer relative ${
-                                                isSelf 
-                                                    ? 'eary-outgoing rounded-br-sm border eary-line' 
+                                                isSelf
+                                                    ? 'eary-outgoing rounded-br-sm border eary-line'
                                                     : 'eary-incoming rounded-bl-sm border eary-line'
                                             }`}
                                         >
@@ -3199,12 +3169,6 @@ export default function IntercomInterface({ roomData, onLeave, language = 'tr-TR
                                                 </div>
                                             )}
 
-                                            {msg.mediaUrl && msg.mediaType === 'image' && (
-                                                <img onClick={() => setMediaViewer(msg)} src={msg.mediaUrl} alt={msg.fileName || 'Gönderilen fotoğraf'} className="max-h-80 w-full cursor-zoom-in rounded-xl object-cover" />
-                                            )}
-                                            {msg.mediaUrl && msg.mediaType === 'video' && (
-                                                <video src={msg.mediaUrl} controls playsInline className="max-h-80 w-full rounded-xl bg-black" />
-                                            )}
                                             {msg.text && (
                                                 <p style={{ fontSize: `${chatFontSize}px` }} className="font-medium">
                                                     {!isSelf && autoTranslate && translations[msg.id] && !showOriginalTranslations[msg.id] ? translations[msg.id] : msg.text}
@@ -3301,16 +3265,14 @@ export default function IntercomInterface({ roomData, onLeave, language = 'tr-TR
 
             {/* Bottom Panel - Input & Speech Control */}
             <footer className="eary-shell space-y-2 border-t eary-line px-3 py-3 pb-[max(12px,env(safe-area-inset-bottom))]">
-                {isUploadingMedia && (
-                    <div className="eary-soft overflow-hidden rounded-full">
-                        <div className="eary-brand-bg h-1 transition-all" style={{ width: `${uploadProgress}%` }} />
-                    </div>
-                )}
                 {/* Speech Recognition Real-Time Preview */}
                 {isListening && interimText && (
-                    <div className="p-3 bg-[#FAF8F5] border border-[#DCD0EC] rounded-2xl animate-pulse">
-                        <span className="text-[10px] text-[#7B52AB] font-bold uppercase tracking-widest block mb-1">
-                            {text.interimPreview}
+                    <div className="max-h-28 overflow-y-auto rounded-2xl border border-[#DCD0EC] bg-[#FAF8F5] p-3">
+                        <span className="mb-1 flex items-center justify-between gap-2 text-[10px] font-bold uppercase tracking-widest text-[#7B52AB]">
+                            <span>{text.interimPreview}</span>
+                            <span className={interimText.length > MAX_VOICE_MESSAGE_CHARS - 80 ? 'text-rose-500' : 'text-[#8A7E9F]'}>
+                                {interimText.length}/{MAX_VOICE_MESSAGE_CHARS}
+                            </span>
                         </span>
                         <p className="text-sm text-[#2D1F47] italic font-medium leading-relaxed">
                             {interimText}
@@ -3333,7 +3295,7 @@ export default function IntercomInterface({ roomData, onLeave, language = 'tr-TR
                             <span className="font-extrabold text-[#7B52AB] block text-[10px]">Cevaplanan: {replyToMsg.senderName}</span>
                             <span className="text-[#8A7E9F] truncate block font-semibold text-[11px]">{replyToMsg.text}</span>
                         </div>
-                        <button 
+                        <button
                             type="button"
                             onClick={() => setReplyToMsg(null)}
                             className="p-1 hover:bg-[#EBE5F7] text-[#8A7E9F] hover:text-[#7B52AB] rounded-full transition-all shrink-0 cursor-pointer border-0 bg-transparent"
@@ -3342,23 +3304,6 @@ export default function IntercomInterface({ roomData, onLeave, language = 'tr-TR
                         </button>
                     </div>
                 )}
-
-                <input
-                    ref={galleryInputRef}
-                    type="file"
-                    accept="image/*,video/*"
-                    multiple
-                    onChange={handleMediaFiles}
-                    className="hidden"
-                />
-                <input
-                    ref={cameraInputRef}
-                    type="file"
-                    accept="image/*"
-                    capture="environment"
-                    onChange={handleMediaFiles}
-                    className="hidden"
-                />
 
                 <div className="flex gap-1.5 overflow-x-auto pb-1">
                     {FACE_TO_FACE_PHRASES.map(phrase => (
@@ -3390,7 +3335,8 @@ export default function IntercomInterface({ roomData, onLeave, language = 'tr-TR
                             ref={manualInputRef}
                             type="text"
                             value={manualText}
-                            onChange={(e) => setManualText(e.target.value)}
+                            onChange={(e) => setManualText(e.target.value.slice(0, MAX_CHAT_MESSAGE_CHARS))}
+                            maxLength={MAX_CHAT_MESSAGE_CHARS}
                             autoCorrect="off"
                             autoCapitalize="none"
                             spellCheck={false}
@@ -3412,25 +3358,6 @@ export default function IntercomInterface({ roomData, onLeave, language = 'tr-TR
                         )}
                     </div>
 
-                    <button
-                        type="button"
-                        onClick={() => galleryInputRef.current?.click()}
-                        disabled={isUploadingMedia}
-                        className="eary-brand eary-row flex h-9 w-9 shrink-0 items-center justify-center rounded-full disabled:opacity-50"
-                        title="Fotoğraf veya video ekle"
-                    >
-                        {isUploadingMedia ? <LoaderCircle size={20} className="animate-spin" /> : <Paperclip size={21} />}
-                    </button>
-
-                    <button
-                        type="button"
-                        onClick={() => cameraInputRef.current?.click()}
-                        disabled={isUploadingMedia}
-                        className="eary-brand eary-row flex h-9 w-9 shrink-0 items-center justify-center rounded-full disabled:opacity-50"
-                        title="Fotoğraf çek"
-                    >
-                        <Camera size={22} />
-                    </button>
                 </form>
 
                 {showEmojiPicker && (
@@ -3454,24 +3381,24 @@ export default function IntercomInterface({ roomData, onLeave, language = 'tr-TR
 
                 {/* Pulsating Microphone Action Box */}
                 <div className="eary-soft flex items-center justify-center gap-2 rounded-lg px-3 py-2">
-                        
+
                         <button
                             type="button"
                             onClick={toggleListening}
 	                            className={`relative flex h-11 w-11 shrink-0 items-center justify-center rounded-full transition-all duration-300 active:scale-90 ${
-	                                isListening 
-	                                    ? 'bg-rose-600 hover:bg-rose-500 text-white shadow-lg shadow-rose-600/30' 
+	                                isListening
+	                                    ? 'bg-rose-600 hover:bg-rose-500 text-white shadow-lg shadow-rose-600/30'
 	                                    : 'eary-brand-bg'
 	                            }`}
 	                        >
                             {isListening ? (
                                 <>
                                     {/* Web Audio API Waveform Visualizer */}
-                                    <canvas 
-                                        ref={visualizerCanvasRef} 
-                                        width="64" 
-                                        height="64" 
-                                        className="absolute inset-0 w-full h-full rounded-full opacity-65 pointer-events-none" 
+                                    <canvas
+                                        ref={visualizerCanvasRef}
+                                        width="64"
+                                        height="64"
+                                        className="absolute inset-0 w-full h-full rounded-full opacity-65 pointer-events-none"
                                     />
                                     <Square size={18} className="relative z-10 fill-white text-white" />
                                 </>
@@ -3482,9 +3409,7 @@ export default function IntercomInterface({ roomData, onLeave, language = 'tr-TR
 	                        <span className={`text-[11px] font-semibold flex items-center gap-1.5 ${
 	                            isListening ? 'text-rose-500 animate-pulse' : 'eary-muted'
 	                        }`}>
-	                            {isSpeechStarting ? (
-	                                'Mikrofon hazırlanıyor...'
-	                            ) : isListening ? (
+	                            {isListening ? (
 	                                <>
 	                                    <span className="w-1.5 h-1.5 rounded-full bg-rose-600 animate-ping shrink-0" />
 	                                    Dinliyor / Kayıt Ediyor... (Bitirmek İçin Basın)
@@ -3505,42 +3430,21 @@ export default function IntercomInterface({ roomData, onLeave, language = 'tr-TR
                         <div className="flex justify-center text-rose-500">
                             <AlertTriangle size={48} className="animate-bounce" />
                         </div>
-                        
+
                         <h3 className="text-lg font-bold text-slate-200">
-                            {speechError === 'offline_pack_missing' ? text.errOfflineTitle : 'Speech Recognition Error'}
+                            Speech Recognition Error
                         </h3>
-                        
+
                         <p className="text-xs text-slate-400 leading-relaxed">
-                            {speechError === 'offline_pack_missing' 
-                                ? text.errOfflineBody 
-                                : `An error occurred: ${speechError}`}
+                            {`An error occurred: ${speechError}`}
                         </p>
-                        
+
                         <div className="flex flex-col gap-2 pt-2">
-                            {speechError === 'offline_pack_missing' && Capacitor.getPlatform() === 'android' && (
-                                <button
-                                    onClick={async () => {
-                                        try {
-                                            const res = await VoiceSettings.openSettings();
-                                            if (!res || !res.success) {
-                                                notifyUser('Ses ayarları açılamadı. Ayarlar > Dil ve Giriş bölümünden çevrimdışı ses tanımayı kontrol edin.');
-                                            }
-                                            setSpeechError(null);
-                                        } catch (e) {
-                                            notifyUser(`Ses ayarları açılamadı: ${e.message}`);
-                                        }
-                                    }}
-                                    className="w-full py-2.5 bg-indigo-600 hover:bg-indigo-500 text-slate-100 font-bold rounded-xl text-xs transition-all active:scale-95 cursor-pointer"
-                                >
-                                    {text.errOfflineBtn}
-                                </button>
-                            )}
-                            
                             <button
                                 onClick={() => setSpeechError(null)}
                                 className="w-full py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-300 font-semibold rounded-xl text-xs transition-all active:scale-95 cursor-pointer"
                             >
-                                {text.errOfflineClose}
+                                Tamam
                             </button>
                         </div>
                     </div>
@@ -3558,7 +3462,7 @@ export default function IntercomInterface({ roomData, onLeave, language = 'tr-TR
                         >
                             <X size={16} />
                         </button>
-                        
+
                         <div className="flex items-center gap-3 border-b border-slate-800 pb-3">
                             <div className="flex justify-center text-indigo-400 bg-indigo-950/40 w-10 h-10 rounded-xl items-center border border-indigo-900/50">
                                 <Watch size={20} />
@@ -3572,7 +3476,7 @@ export default function IntercomInterface({ roomData, onLeave, language = 'tr-TR
                                 </p>
                             </div>
                         </div>
-                        
+
                         <div className="space-y-3">
                             {/* Step 1 */}
                             <div className="p-3 bg-slate-950/40 border border-slate-850 rounded-2xl space-y-1.5">
@@ -3585,10 +3489,10 @@ export default function IntercomInterface({ roomData, onLeave, language = 'tr-TR
                                                 try {
                                                     await VoiceSettings.openNotificationSettings();
                                                 } catch {
-                                                    notifyUser('Bildirim ayarları açılırken hata oluştu.');
+                                                    alert("Bildirim ayarları açılırken hata oluştu.");
                                                 }
                                             } else {
-                                                notifyUser('Bildirim ayarları Android uygulaması üzerinden açılabilir.');
+                                                alert("Bildirim Ayarları sadece Android uygulaması üzerinden açılabilir. Lütfen Ayarlar -> Uygulamalar -> Eary -> Bildirimler yolunu izleyin.");
                                             }
                                         }}
                                         className="text-[10px] font-bold bg-indigo-650 hover:bg-indigo-500 text-slate-100 px-3 py-1.5 rounded-lg transition-all cursor-pointer shadow-sm shadow-indigo-650/10"
@@ -3612,10 +3516,10 @@ export default function IntercomInterface({ roomData, onLeave, language = 'tr-TR
                                                 try {
                                                     await VoiceSettings.openBatterySettings();
                                                 } catch {
-                                                    notifyUser('Pil ayarları açılırken hata oluştu.');
+                                                    alert("Pil ayarları açılırken hata oluştu.");
                                                 }
                                             } else {
-                                                notifyUser('Pil ayarları Android uygulaması üzerinden açılabilir.');
+                                                alert("Pil Ayarları sadece Android uygulaması üzerinden açılabilir. Lütfen Ayarlar -> Uygulamalar -> Eary -> Pil bölümünden 'Sınırsız' yapın.");
                                             }
                                         }}
                                         className="text-[10px] font-bold bg-amber-650 hover:bg-amber-500 text-slate-100 px-3 py-1.5 rounded-lg transition-all cursor-pointer shadow-sm shadow-amber-650/10"
@@ -3661,10 +3565,10 @@ export default function IntercomInterface({ roomData, onLeave, language = 'tr-TR
                                                 try {
                                                     await VoiceSettings.openBluetoothSettings();
                                                 } catch {
-                                                    notifyUser('Bluetooth ayarları açılamadı.');
+                                                    alert("Bluetooth ayarları açılamadı.");
                                                 }
                                             } else {
-                                                notifyUser('Bluetooth ayarları Android üzerinden açılabilir.');
+                                                alert("Bluetooth ayarları sadece Android üzerinden açılabilir.");
                                             }
                                         }}
                                         className="text-[10px] font-bold bg-slate-800 hover:bg-slate-700 text-slate-350 px-3 py-1.5 rounded-lg transition-all cursor-pointer"
@@ -3681,106 +3585,6 @@ export default function IntercomInterface({ roomData, onLeave, language = 'tr-TR
                 </div>
             )}
 
-            {/* Participants Modal (WhatsApp style) */}
-            {isParticipantsModalOpen && mediaViewer && (
-                <div className="absolute inset-0 bg-slate-950/80 backdrop-blur-xs flex items-center justify-center z-50 p-4">
-                    <div className="bg-slate-900 border border-slate-800/80 rounded-3xl p-5 w-full max-w-sm shadow-2xl relative animate-scaleUp text-left space-y-4">
-                        <button
-                            type="button"
-                            onClick={() => setIsParticipantsModalOpen(false)}
-                            className="absolute top-3.5 right-3.5 p-1.5 text-slate-400 hover:text-slate-200 rounded-full hover:bg-slate-800 transition-all cursor-pointer"
-                        >
-                            <X size={16} />
-                        </button>
-                        
-                        <div className="flex items-center gap-3 border-b border-slate-800 pb-3">
-                            <div className="flex justify-center text-indigo-400 bg-indigo-950/40 w-10 h-10 rounded-xl items-center border border-indigo-900/50 text-lg">
-                                👥
-                            </div>
-                            <div>
-                                <h3 className="text-sm font-bold text-slate-100 uppercase tracking-wider">
-                                    Oda Katılımcıları
-                                </h3>
-                                <p className="text-[10px] text-slate-450 font-medium mt-0.5">
-                                    {roomMembers.length} Aktif Kullanıcı
-                                </p>
-                            </div>
-                        </div>
-
-                        <div className="space-y-2.5 max-h-64 overflow-y-auto pr-1">
-                            {roomMembers.map((member, idx) => {
-                                const initials = member.nickname ? member.nickname.charAt(0).toUpperCase() : '?';
-                                const colors = [
-                                    'bg-indigo-600 text-indigo-100',
-                                    'bg-emerald-600 text-emerald-100',
-                                    'bg-amber-600 text-amber-100',
-                                    'bg-rose-600 text-rose-100',
-                                    'bg-purple-600 text-purple-100',
-                                    'bg-pink-600 text-pink-100',
-                                    'bg-cyan-600 text-cyan-100'
-                                ];
-                                const colorClass = colors[(member.nickname?.length || 0) % colors.length];
-                                const isCurrent = member.nickname === nickname;
-                                
-                                // Format Role label
-                                let roleLabel = 'Karşılıklı İletişim';
-                                let roleClass = 'bg-indigo-550/10 border-indigo-500/20 text-indigo-400';
-                                if (member.role === 'station') {
-                                    roleLabel = 'Konuşmacı (Mikrofon)';
-                                    roleClass = 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400';
-                                } else if (member.role === 'display') {
-                                    roleLabel = 'Yansıtma Ekranı';
-                                    roleClass = 'bg-amber-500/10 border-amber-500/20 text-amber-400';
-                                }
-
-                                return (
-                                    <div key={idx} className="flex items-center justify-between p-2.5 bg-slate-950/40 border border-slate-850 rounded-2xl">
-                                        <div className="flex items-center gap-3">
-                                            {member.photo ? (
-                                                <img
-                                                    src={member.photo}
-                                                    alt={member.nickname}
-                                                    className="w-10 h-10 rounded-full object-cover border border-slate-700"
-                                                />
-                                            ) : (
-                                                <div className={`w-10 h-10 rounded-full flex items-center justify-center text-sm font-bold border border-slate-800 ${colorClass}`}>
-                                                    {initials}
-                                                </div>
-                                            )}
-                                            <div className="space-y-0.5">
-                                                <div className="font-bold text-xs text-slate-200 flex items-center gap-1.5">
-                                                    {member.nickname}
-                                                    {isCurrent && (
-                                                        <span className="px-1.5 py-0.2 bg-slate-850 border border-slate-700 text-slate-400 font-bold rounded-md text-[8px] uppercase">
-                                                            Siz
-                                                        </span>
-                                                    )}
-                                                </div>
-                                                {member.username ? (
-                                                    <div className="text-[9px] text-slate-550 font-mono">@{member.username}</div>
-                                                ) : (
-                                                    <div className="text-[9px] text-slate-550 italic">Misafir Kullanıcı</div>
-                                                )}
-                                            </div>
-                                        </div>
-                                        <span className={`px-2 py-0.5 border rounded-lg text-[9px] font-bold shrink-0 ${roleClass}`}>
-                                            {roleLabel}
-                                        </span>
-                                    </div>
-                                );
-                            })}
-                        </div>
-                        
-                        <button
-                            type="button"
-                            onClick={() => setIsParticipantsModalOpen(false)}
-                            className="w-full py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-350 font-bold rounded-xl transition-all cursor-pointer text-center text-xs uppercase tracking-wider"
-                        >
-                            Kapat
-                        </button>
-                    </div>
-                </div>
-            )}
             {isParticipantsModalOpen && (
                 <ConversationInfo
                     roomId={roomId}
@@ -3794,14 +3598,6 @@ export default function IntercomInterface({ roomData, onLeave, language = 'tr-TR
                     setChatTheme={setChatTheme}
                     onClearChat={clearChatForMe}
                 />
-            )}
-            {mediaViewer && (
-                <div className="fixed inset-0 z-[120] flex flex-col bg-black/95 p-3" onClick={() => setMediaViewer(null)}>
-                    <header className="flex items-center justify-between pb-3 text-white"><div className="flex items-center gap-2"><ImageIcon size={18} /><span className="text-sm font-semibold">{mediaViewer.senderName}</span></div><button type="button" onClick={() => setMediaViewer(null)} className="flex h-9 w-9 items-center justify-center rounded-full bg-white/10"><X size={20} /></button></header>
-                    <div className="flex flex-1 items-center justify-center overflow-hidden">
-                        {mediaViewer.mediaType === 'video' ? <video src={mediaViewer.mediaUrl} controls autoPlay playsInline className="max-h-full max-w-full" onClick={e => e.stopPropagation()} /> : <img src={mediaViewer.mediaUrl} alt={mediaViewer.fileName || 'Medya'} className="max-h-full max-w-full object-contain" onClick={e => e.stopPropagation()} />}
-                    </div>
-                </div>
             )}
             {forwardingMessage && (
                 <div className="fixed inset-0 z-[110] flex items-end bg-black/35" onClick={() => setForwardingMessage(null)}>
@@ -3828,7 +3624,7 @@ export default function IntercomInterface({ roomData, onLeave, language = 'tr-TR
                 </div>
             )}
             {toast && <div className="fixed bottom-24 left-1/2 z-[130] -translate-x-1/2 rounded-full bg-[#17221f] px-4 py-2 text-xs font-semibold text-white shadow-xl">{toast}</div>}
-            <Sidebar 
+            <Sidebar
                 isOpen={isSidebarOpen}
                 onClose={() => setIsSidebarOpen(false)}
                 language={language}
@@ -3854,6 +3650,7 @@ export default function IntercomInterface({ roomData, onLeave, language = 'tr-TR
                 onToggleAlwaysNotify={handleToggleAlwaysNotify}
                 roomData={roomData}
                 onUpdateAccount={handleUpdateAccount}
+                onDeleteAccount={handleDeleteAccount}
                 initialSection={sidebarSection}
                 speechLang={speechLang}
                 setSpeechLang={setSpeechLang}

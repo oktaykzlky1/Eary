@@ -1,10 +1,10 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
-    ArrowLeft, Bell, BellOff, Camera, Check, ChevronRight,
-    Image as ImageIcon, LockKeyhole, MessageSquareX, Palette, ShieldCheck,
+    ArrowLeft, Bell, BellOff, Check, ChevronRight,
+    LockKeyhole, MessageSquareX, Palette, ShieldCheck,
     UserRound, UsersRound, X
 } from 'lucide-react';
-import { db, storage, ref, onValue, update, storageRef, uploadBytesResumable, getDownloadURL } from '../firebase';
+import { db, ref, onValue, update } from '../firebase';
 import { getDeviceId } from '../utils/pushNotifications';
 import { sha256Hex } from '../utils/hash';
 
@@ -23,7 +23,6 @@ export default function ConversationInfo({ roomId, members, messages, nickname, 
     const [metadata, setMetadata] = useState({});
     const [editingName, setEditingName] = useState(false);
     const [nameDraft, setNameDraft] = useState('');
-    const [uploadingPhoto, setUploadingPhoto] = useState(false);
     const [muteUntil, setMuteUntil] = useState(() => Number(localStorage.getItem(`eary_mute_${roomId}`) || 0));
     const [showMuteOptions, setShowMuteOptions] = useState(false);
     const [showThemes, setShowThemes] = useState(false);
@@ -31,7 +30,6 @@ export default function ConversationInfo({ roomId, members, messages, nickname, 
     const [showLockSetup, setShowLockSetup] = useState(false);
     const [lockPin, setLockPin] = useState('');
     const [lockError, setLockError] = useState('');
-    const photoInputRef = useRef(null);
 
     useEffect(() => onValue(ref(db, `rooms/${roomId}/metadata`), snapshot => {
         const value = snapshot.val() || {};
@@ -56,28 +54,10 @@ export default function ConversationInfo({ roomId, members, messages, nickname, 
     const displayName = directConversation
         ? (displayTitle || otherPerson?.nickname || 'Sohbet')
         : (metadata.name || (isGroup ? participants.map(person => person.nickname).join(', ') : (otherPerson?.nickname || 'Sohbet')));
-    const media = messages.filter(message => message.mediaUrl);
-
     const saveName = async () => {
         if (!nameDraft.trim()) return;
         await update(ref(db, `rooms/${roomId}/metadata`), { name: nameDraft.trim(), updatedAt: Date.now() });
         setEditingName(false);
-    };
-
-    const uploadGroupPhoto = async event => {
-        const file = event.target.files?.[0];
-        event.target.value = '';
-        if (!file) return;
-        setUploadingPhoto(true);
-        try {
-            const target = storageRef(storage, `roomPhotos/${roomId}/${Date.now()}-${file.name.replace(/[^a-zA-Z0-9._-]/g, '_')}`);
-            const task = uploadBytesResumable(target, file, { contentType: file.type });
-            const snapshot = await new Promise((resolve, reject) => task.on('state_changed', undefined, reject, () => resolve(task.snapshot)));
-            const photoUrl = await getDownloadURL(snapshot.ref);
-            await update(ref(db, `rooms/${roomId}/metadata`), { photoUrl, updatedAt: Date.now() });
-        } finally {
-            setUploadingPhoto(false);
-        }
     };
 
     const setMute = async value => {
@@ -121,18 +101,11 @@ export default function ConversationInfo({ roomId, members, messages, nickname, 
             </header>
             <div className="flex-1 overflow-y-auto pb-8">
                 <section className="flex flex-col items-center border-b eary-line px-5 py-6 text-center">
-                    <input ref={photoInputRef} type="file" accept="image/*" onChange={uploadGroupPhoto} className="hidden" />
-                    <button type="button" onClick={() => isGroup && photoInputRef.current?.click()} className="eary-brand-soft relative flex h-24 w-24 items-center justify-center overflow-hidden rounded-full text-2xl font-black">
-                        {metadata.photoUrl ? <img src={metadata.photoUrl} alt={displayName} className="h-full w-full object-cover" /> : isGroup ? <UsersRound size={36} /> : <UserRound size={36} />}
-                        {isGroup && <span className="eary-brand-bg absolute bottom-0 right-0 flex h-8 w-8 items-center justify-center rounded-full border-2 border-[var(--surface)]">{uploadingPhoto ? '…' : <Camera size={14} />}</span>}
+                    <button type="button" onClick={() => isGroup && setEditingName(true)} className="eary-brand-soft relative flex h-24 w-24 items-center justify-center overflow-hidden rounded-full text-2xl font-black">
+                        {isGroup ? <UsersRound size={36} /> : <UserRound size={36} />}
                     </button>
                     {editingName && isGroup ? <div className="mt-4 flex w-full gap-2"><input value={nameDraft} onChange={event => setNameDraft(event.target.value)} className="eary-input min-w-0 flex-1 rounded-lg border px-3 py-2 text-sm" autoFocus /><button type="button" onClick={saveName} className="eary-brand-bg flex h-10 w-10 items-center justify-center rounded-lg"><Check size={18} /></button><button type="button" onClick={() => setEditingName(false)} className="eary-soft eary-muted flex h-10 w-10 items-center justify-center rounded-lg"><X size={18} /></button></div> : <button type="button" onClick={() => isGroup && setEditingName(true)} className="mt-4 max-w-full truncate text-lg font-bold">{displayName}</button>}
                     <p className="eary-muted mt-1 text-xs">{isGroup ? `${metadata.memberCount || participants.length} katılımcı · ${members.length} çevrimiçi` : members.some(member => member.nickname === otherPerson?.nickname) ? 'Çevrimiçi' : 'Çevrimdışı'}</p>
-                </section>
-
-                <section className="border-b eary-line py-3">
-                    <div className="flex items-center justify-between px-4 pb-3"><div><h2 className="text-sm font-bold">Medya, bağlantı ve belgeler</h2><p className="eary-muted text-[10px]">{media.length} öğe</p></div><ChevronRight size={18} className="eary-muted" /></div>
-                    {media.length ? <div className="flex gap-2 overflow-x-auto px-4">{media.slice(-8).reverse().map(item => item.mediaType === 'video' ? <video key={item.id} src={item.mediaUrl} className="h-20 w-20 shrink-0 rounded-lg bg-black object-cover" /> : <img key={item.id} src={item.mediaUrl} alt="Sohbet medyası" className="h-20 w-20 shrink-0 rounded-lg object-cover" />)}</div> : <div className="eary-muted flex items-center gap-2 px-4 text-xs"><ImageIcon size={17} /> Henüz medya paylaşılmadı</div>}
                 </section>
 
                 <section className="border-b eary-line">

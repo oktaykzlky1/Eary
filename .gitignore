@@ -26,11 +26,13 @@ DerivedData/
 
 # Local package/cache artifacts
 .npm-cache/
+backups/
 *.zip
 *.apk
 *.aab
 
 # Signing keys should never be committed
+android/keystore.properties
 *.keystore
 *.jks
 *.p12

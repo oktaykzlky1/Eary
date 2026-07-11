@@ -1,11 +1,53 @@
-import { useState, useEffect, useRef } from 'react';
+﻿import { useState, useEffect, useRef } from 'react';
 import RoomSetup from './components/RoomSetup';
 import IntercomInterface from './components/IntercomInterface';
 import DisplayMode from './components/DisplayMode';
 import { Capacitor } from '@capacitor/core';
 import { App as CapApp } from '@capacitor/app';
-import { getInitialAppLanguage, normalizeAppLanguage } from './utils/language';
+import { getInitialAppLanguage, normalizeAppLanguage, SUPPORTED_LANGUAGES } from './utils/language';
+import { uiText } from './utils/i18n';
 import { getRest, updateRest } from './firebase';
+
+function LanguageGate({ language, onSelect }) {
+    const text = uiText(language);
+    const [selectingLanguage, setSelectingLanguage] = useState('');
+
+    const handleSelect = async code => {
+        if (selectingLanguage) return;
+        setSelectingLanguage(code);
+        try {
+            await onSelect(code);
+        } catch (error) {
+            console.warn('Initial language save failed:', error);
+        } finally {
+            setSelectingLanguage('');
+        }
+    };
+
+    return (
+        <main className="eary-shell fixed inset-0 z-[300] flex items-center justify-center bg-[var(--surface)] px-5 text-[var(--text)]">
+            <section className="w-full max-w-md">
+                <div className="eary-brand-bg mb-5 flex h-14 w-14 items-center justify-center rounded-xl text-2xl font-black">E</div>
+                <h1 className="text-3xl font-black tracking-normal">{text.chooseLanguageTitle}</h1>
+                <p className="eary-muted mt-3 text-sm font-medium leading-6">{text.chooseLanguageBody}</p>
+                <div className="mt-7 grid gap-2">
+                    {SUPPORTED_LANGUAGES.map(item => (
+                        <button
+                            key={item.code}
+                            type="button"
+                            onClick={() => handleSelect(item.code)}
+                            disabled={Boolean(selectingLanguage)}
+                            className={`flex items-center justify-between rounded-lg border px-4 py-3 text-left text-sm font-bold ${normalizeAppLanguage(language) === item.code ? 'eary-brand-bg border-transparent' : 'eary-soft eary-line'}`}
+                        >
+                            <span>{item.nativeLabel}</span>
+                            <span className="text-[10px] font-black uppercase opacity-70">{selectingLanguage === item.code ? '...' : item.short}</span>
+                        </button>
+                    ))}
+                </div>
+            </section>
+        </main>
+    );
+}
 
 export default function App() {
     const [theme, setTheme] = useState(() => localStorage.getItem('eary_theme') || 'light');
@@ -67,10 +109,13 @@ export default function App() {
 
                 const latestNotice = notices[notices.length - 1][1];
                 const acceptedBy = latestNotice.acceptedByNickname || `@${latestNotice.acceptedByUsername}`;
-                window.dispatchEvent(new CustomEvent('eary:toast', { detail: `${acceptedBy} isteğinizi kabul etti` }));
+                window.dispatchEvent(new CustomEvent('eary:toast', { detail: `${acceptedBy} konu\u015fma iste\u011finizi kabul etti` }));
 
                 const consumed = {};
-                notices.forEach(([id]) => { consumed[`acceptanceNotices/${account.username}/${id}`] = null; });
+                notices.forEach(([id]) => {
+                    consumed[`acceptanceNotices/${account.username}/${id}`] = null;
+                    consumed[`sentMessageRequests/${account.username}/${id}`] = null;
+                });
                 await updateRest(consumed);
             } catch (error) {
                 console.error('Acceptance notice sync failed:', error);
@@ -118,11 +163,20 @@ export default function App() {
         return null;
     });
     const [language, setLanguage] = useState(() => getInitialAppLanguage());
+    const [languageConfirmed, setLanguageConfirmed] = useState(() => localStorage.getItem('eary_language_confirmed') === 'true');
     const handleLanguageChange = nextLanguage => {
         const normalized = normalizeAppLanguage(nextLanguage);
         setLanguage(normalized);
         localStorage.setItem('eary_app_language', normalized);
         localStorage.setItem('eary_speech_lang', normalized);
+    };
+
+    const confirmLanguage = nextLanguage => {
+        const normalized = normalizeAppLanguage(nextLanguage);
+        handleLanguageChange(normalized);
+        localStorage.setItem('eary_language_confirmed', 'true');
+        setLanguageConfirmed(true);
+        return { status: 'saved' };
     };
 
     const handleJoin = (roomData) => {
@@ -201,6 +255,10 @@ export default function App() {
             }
         };
     }, [joinedRoom]);
+
+    if (!languageConfirmed) {
+        return <LanguageGate language={language} onSelect={confirmLanguage} />;
+    }
 
     return (
         <div className="eary-app min-h-screen selection:bg-[#DDE8E5]">

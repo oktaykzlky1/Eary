@@ -8,6 +8,7 @@
     "build": "vite build",
     "admin:dev": "vite --config admin/vite.config.js",
     "admin:build": "vite build --config admin/vite.config.js",
+    "check:microphone": "node scripts/check-microphone-regressions.mjs",
     "lint": "eslint .",
     "preview": "vite preview"
   },
