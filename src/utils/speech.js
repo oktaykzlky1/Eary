@@ -3,6 +3,7 @@ import { Capacitor, registerPlugin } from '@capacitor/core';
 const EarySpeech = registerPlugin('EarySpeech');
 
 let nativePermissionRequestPromise = null;
+let nativePermissionsGranted = false;
 let activeNativeRecognizer = null;
 let nextNativeSessionId = 1;
 let lastIosNativeTranscript = '';
@@ -277,8 +278,13 @@ class NativeSpeechRecognizer {
     }
 
     async ensurePermissions() {
+        if (nativePermissionsGranted) return;
+
         let permissions = await EarySpeech.checkPermissions();
-        if (isGranted(permissions?.microphone) && isGranted(permissions?.speechRecognition ?? 'granted')) return;
+        if (isGranted(permissions?.microphone) && isGranted(permissions?.speechRecognition ?? 'granted')) {
+            nativePermissionsGranted = true;
+            return;
+        }
 
         if (!nativePermissionRequestPromise) {
             nativePermissionRequestPromise = EarySpeech.requestPermissions()
@@ -289,8 +295,11 @@ class NativeSpeechRecognizer {
 
         permissions = await nativePermissionRequestPromise;
         if (!isGranted(permissions?.microphone) || !isGranted(permissions?.speechRecognition ?? 'granted')) {
-            throw new Error('Mikrofon veya konuşma tanıma izni reddedildi.');
+            nativePermissionsGranted = false;
+            throw new Error('Mikrofon veya konusma tanima izni reddedildi.');
         }
+
+        nativePermissionsGranted = true;
     }
 
     async clearListeners() {

@@ -192,6 +192,7 @@ const AMBIENT_MUTABLE_TAIL_WORDS = 14;
 const AMBIENT_STABLE_PARTIAL_WORDS = 32;
 const AMBIENT_PARAGRAPH_WORDS = 32;
 const AMBIENT_VISIBLE_PARAGRAPHS = 5;
+const usesFullSessionPartialResults = () => Capacitor.getPlatform() === 'ios';
 
 const cleanRawAmbientText = text => stripLivePunctuation(text);
 
@@ -221,6 +222,7 @@ const composeRawAmbientTranscript = (committedText, draftText) => appendRawAmbie
 
 const splitAmbientStableTail = text => {
     const words = splitWords(text);
+    if (usesFullSessionPartialResults()) return { stable: '', tail: words.join(' ') };
     if (words.length <= AMBIENT_STABLE_PARTIAL_WORDS) return { stable: '', tail: words.join(' ') };
     return {
         stable: words.slice(0, -AMBIENT_MUTABLE_TAIL_WORDS).join(' '),
