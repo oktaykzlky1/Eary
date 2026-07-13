@@ -928,12 +928,23 @@ export default function ChatHome(props) {
 
             if (request.type === 'group_invite') {
                 const historyItem = { roomId: request.roomId, roomPin: request.roomPin, nickname: account.nickname, role: 'intercom', roomType: 'intercom_only', kind: 'group', title: request.groupName, timestamp: Date.now() };
+                const inviterHistoryItem = { roomId: request.roomId, roomPin: request.roomPin, nickname: request.fromNickname, role: 'intercom', roomType: 'intercom_only', kind: 'group', title: request.groupName, timestamp: Date.now() };
                 await updateRest({
                     [`messageRequests/${account.username}/${request.id}/status`]: 'accepted',
                     [`sentMessageRequests/${request.fromUsername}/${request.id}/status`]: 'accepted',
                     [`rooms/${request.roomId}/members/${account.username}`]: true,
                     [`rooms/${request.roomId}/metadata/memberNames/${account.username}`]: account.nickname,
-                    [`users/${account.username}/history/${request.roomId}`]: historyItem
+                    [`users/${account.username}/history/${request.roomId}`]: historyItem,
+                    [`acceptanceNotices/${request.fromUsername}/${request.id}`]: {
+                        status: 'pending',
+                        noticeKind: 'group_invite',
+                        acceptedByUsername: account.username,
+                        acceptedByNickname: account.nickname,
+                        groupName: request.groupName,
+                        roomId: request.roomId,
+                        historyItem: inviterHistoryItem,
+                        createdAt: Date.now()
+                    }
                 });
                 const members = await getRest(`rooms/${request.roomId}/members`).catch(() => null);
                 if (members) await updateRest({ [`rooms/${request.roomId}/metadata/memberCount`]: Object.keys(members).length }).catch(() => {});

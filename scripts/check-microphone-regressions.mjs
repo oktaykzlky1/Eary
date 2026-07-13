@@ -7,6 +7,7 @@ const files = {
   speech: 'src/utils/speech.js',
   hub: 'src/components/AccessibilityHub.jsx',
   chatHome: 'src/components/ChatHome.jsx',
+  newConversation: 'src/components/NewConversation.jsx',
   intercom: 'src/components/IntercomInterface.jsx',
   sidebar: 'src/components/Sidebar.jsx',
   app: 'src/App.jsx',
@@ -70,7 +71,7 @@ const checks = [
     file: files.hub,
     ok: contents.hub.includes('pendingCaptionFrameRef') &&
       contents.hub.includes('lastActivitySyncRef') &&
-      contents.hub.includes('listening || !translateEnabled') &&
+      contents.hub.includes('if (listening || !captions.length)') &&
       contents.hub.includes('appendRawAmbientTranscript') &&
       contents.hub.includes('composeRawAmbientTranscript') &&
       contents.hub.includes('updateAmbientLiveTail') &&
@@ -80,7 +81,16 @@ const checks = [
       contents.hub.includes('displayedCaptions') &&
       contents.hub.includes('syncAmbientBackgroundWork') &&
       contents.hub.includes('setInterval(() => syncAmbientBackgroundWork(false), 10000'),
-    message: 'Ambient live captions must stay raw, use stable text plus mutable live tail, render as lightweight paragraphs, move storage/cleanup to the 10 second background loop, and pause translation while listening.',
+    message: 'Ambient live captions must stay raw, use stable text plus mutable live tail, move storage/cleanup to the 10 second background loop, and pause translation while listening.',
+  },
+  {
+    file: files.hub,
+    ok: contents.hub.includes('ambientTranslation') &&
+      contents.hub.includes('liveAmbientText') &&
+      contents.hub.includes('translateText(sourceText, translationTargetLang, language)') &&
+      contents.hub.includes('Ceviri - {getLanguageLabel(translationTargetLang)}') &&
+      !contents.hub.includes('captionTranslations[line.id]'),
+    message: 'Ambient translation must translate the full transcript once and render it below the source text, not per paragraph.',
   },
   {
     file: files.chatHome,
@@ -112,6 +122,15 @@ const checks = [
       !contents.chatHome.includes('selectedMode.eyebrow') &&
       !contents.chatHome.includes('text.navListen'),
     message: 'Home activity detail must consume Android back, home bottom navigation must stay three-item, and visible live-label pills must stay removed.',
+  },
+  {
+    file: files.newConversation,
+    ok: contents.newConversation.includes('Paylaşımı aç') &&
+      contents.newConversation.includes('navigator.share(sharePayload)') &&
+      contents.newConversation.includes('Kabul edilince sohbet otomatik olarak Sohbetler') &&
+      contents.newConversation.includes('Gruba eklemek için kişi ara') &&
+      contents.newConversation.includes('En az 2 kişi seçin'),
+    message: 'New conversation flow must separate copy/share, explain accepted invites, and make group member selection explicit.',
   },
   {
     file: files.hub,

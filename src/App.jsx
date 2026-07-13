@@ -122,7 +122,10 @@ export default function App() {
 
                 const latestNotice = notices[notices.length - 1][1];
                 const acceptedBy = latestNotice.acceptedByNickname || `@${latestNotice.acceptedByUsername}`;
-                window.dispatchEvent(new CustomEvent('eary:toast', { detail: `${acceptedBy} konu\u015fma iste\u011finizi kabul etti` }));
+                const toastText = latestNotice.noticeKind === 'group_invite'
+                    ? `${acceptedBy} ${latestNotice.groupName || 'grup'} davetini kabul etti`
+                    : `${acceptedBy} konu\u015fma iste\u011finizi kabul etti`;
+                window.dispatchEvent(new CustomEvent('eary:toast', { detail: toastText }));
 
                 const consumed = {};
                 notices.forEach(([id]) => {

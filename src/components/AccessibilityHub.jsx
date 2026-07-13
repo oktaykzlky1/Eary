@@ -191,7 +191,6 @@ const countCommonPrefixWords = (leftWords, rightWords) => {
 const AMBIENT_MUTABLE_TAIL_WORDS = 14;
 const AMBIENT_STABLE_PARTIAL_WORDS = 32;
 const AMBIENT_PARAGRAPH_WORDS = 32;
-const AMBIENT_VISIBLE_PARAGRAPHS = 5;
 const usesFullSessionPartialResults = () => Capacitor.getPlatform() === 'ios';
 
 const cleanRawAmbientText = text => stripLivePunctuation(text);
@@ -557,14 +556,16 @@ function AmbientListeningTool({ onBack, appLanguage, account }) {
     const [listening, setListening] = useState(false);
     const [saved, setSaved] = useState(false);
     const [exporting, setExporting] = useState(false);
-    const [showFullTranscript, setShowFullTranscript] = useState(false);
     const [languageSaved, setLanguageSaved] = useState(false);
     const [contextId, setContextId] = useState(() => localStorage.getItem('eary_ambient_context') || 'general');
     const [language, setLanguage] = useState(() => normalizeAppLanguage(appLanguage || localStorage.getItem('eary_ambient_language') || getInitialAppLanguage()));
     const [draftLanguage, setDraftLanguage] = useState(() => normalizeAppLanguage(appLanguage || localStorage.getItem('eary_ambient_language') || getInitialAppLanguage()));
     const [translateEnabled, setTranslateEnabled] = useState(() => localStorage.getItem('eary_ambient_translate') === 'true');
     const [translationTargetLang, setTranslationTargetLang] = useState(() => localStorage.getItem('eary_ambient_translate_target') || 'tr-TR');
-    const [captionTranslations, setCaptionTranslations] = useState({});
+    const [, setCaptionTranslations] = useState({});
+    const [ambientDisplayText, setAmbientDisplayText] = useState('');
+    const [ambientTranslation, setAmbientTranslation] = useState('');
+    const [ambientTranslationLoading, setAmbientTranslationLoading] = useState(false);
     const recognizerRef = useRef(null);
     const scrollRef = useRef(null);
     const autoScrollAmbientRef = useRef(true);
@@ -580,8 +581,7 @@ function AmbientListeningTool({ onBack, appLanguage, account }) {
     const contextConfig = MODE_CONFIG[contextId] || MODE_CONFIG.general;
     const text = uiText(language);
     const speechTerms = buildSpeechPersonalTerms(account);
-    const hiddenCaptionCount = Math.max(0, captions.length - AMBIENT_VISIBLE_PARAGRAPHS);
-    const displayedCaptions = showFullTranscript ? captions : captions.slice(-AMBIENT_VISIBLE_PARAGRAPHS);
+    const displayedCaptions = captions;
     const hasUnsavedLanguage = normalizeAppLanguage(draftLanguage) !== normalizeAppLanguage(language);
     const runAfterUiPaint = callback => {
         requestAnimationFrame(() => {
@@ -607,6 +607,7 @@ function AmbientListeningTool({ onBack, appLanguage, account }) {
     useEffect(() => localStorage.setItem('eary_ambient_translate_target', translationTargetLang), [translationTargetLang]);
     useEffect(() => {
         setCaptionTranslations({});
+        setAmbientTranslation('');
     }, [contextId, language]);
     useEffect(() => {
         if (scrollRef.current && autoScrollAmbientRef.current) {
@@ -614,22 +615,26 @@ function AmbientListeningTool({ onBack, appLanguage, account }) {
         }
     }, [captions, interim]);
     useEffect(() => {
-        if (listening || !translateEnabled || !captions.length) return;
-        const untranslated = captions.filter(line => line.text && !captionTranslations[line.id]);
-        if (!untranslated.length) return;
+        if (!translateEnabled) {
+            setAmbientTranslation('');
+            setAmbientTranslationLoading(false);
+            return undefined;
+        }
+        if (listening || !captions.length) return undefined;
+        const sourceText = ambientDisplayText;
+        if (!sourceText) return undefined;
         let cancelled = false;
-        untranslated.slice(-4).forEach(async line => {
-            const translated = await translateText(line.text, translationTargetLang, language);
-            if (cancelled || !translated || translated.toLocaleLowerCase('tr-TR') === line.text.toLocaleLowerCase('tr-TR')) return;
-            setCaptionTranslations(current => ({
-                ...current,
-                [line.id]: translated
-            }));
+        setAmbientTranslationLoading(true);
+        translateText(sourceText, translationTargetLang, language).then(translated => {
+            if (cancelled) return;
+            setAmbientTranslation(translated && translated.toLocaleLowerCase('tr-TR') !== sourceText.toLocaleLowerCase('tr-TR') ? translated : '');
+        }).finally(() => {
+            if (!cancelled) setAmbientTranslationLoading(false);
         });
         return () => {
             cancelled = true;
         };
-    }, [captions, captionTranslations, language, listening, translateEnabled, translationTargetLang]);
+    }, [ambientDisplayText, captions, language, listening, translateEnabled, translationTargetLang]);
     const getAmbientDisplayText = () => composeRawAmbientTranscript(ambientCommittedRef.current, ambientDraftRef.current);
 
     const saveAmbientLanguage = () => {
@@ -647,6 +652,7 @@ function AmbientListeningTool({ onBack, appLanguage, account }) {
     const queueAmbientCaption = (displayText, confidence, live = true) => {
         if (!displayText) return;
         setInterim('');
+        setAmbientDisplayText(displayText);
         pendingCaptionRef.current = buildAmbientParagraphs(displayText, confidence, live);
         if (!pendingCaptionFrameRef.current) {
             pendingCaptionFrameRef.current = requestAnimationFrame(() => {
@@ -705,6 +711,7 @@ function AmbientListeningTool({ onBack, appLanguage, account }) {
         }
         const finalCaptions = buildAmbientParagraphs(finalText, null, false);
         pendingCaptionRef.current = finalCaptions;
+        setAmbientDisplayText(finalText);
         setCaptions(finalCaptions);
         syncAmbientBackgroundWork(true);
     };
@@ -796,7 +803,7 @@ function AmbientListeningTool({ onBack, appLanguage, account }) {
 
     const buildAmbientSession = () => {
         syncAmbientBackgroundWork(true);
-        const transcriptText = captions.map(line => line.text).join('\n\n').trim();
+        const transcriptText = getAmbientDisplayText();
         if (!transcriptText) return null;
         const processedText = cleanListeningText(transcriptText, language, { personalTerms: speechTerms, context: contextId, finalize: true }) || transcriptText;
         ambientProcessedTextRef.current = processedText;
@@ -841,6 +848,7 @@ function AmbientListeningTool({ onBack, appLanguage, account }) {
         const node = event.currentTarget;
         autoScrollAmbientRef.current = node.scrollHeight - node.scrollTop - node.clientHeight < 48;
     };
+    const liveAmbientText = ambientDisplayText || displayedCaptions.map(line => line.text).join(' ');
     return (
         <main className="eary-shell mx-auto flex h-screen w-full max-w-md flex-col overflow-hidden sm:h-[800px] sm:rounded-xl sm:border sm:eary-line">
             <header className="eary-ios-safe-header flex items-center gap-3 border-b eary-line px-4 pb-3">
@@ -875,7 +883,7 @@ function AmbientListeningTool({ onBack, appLanguage, account }) {
                 </label>
                 {translateEnabled && (
                     <label className="col-span-2 block text-[10px] font-black uppercase eary-muted">{text.translation}
-                        <select value={translationTargetLang} onChange={event => { setCaptionTranslations({}); setTranslationTargetLang(event.target.value); }} className="eary-input mt-1 w-full rounded-lg border px-2 py-2 text-xs font-bold normal-case">
+                        <select value={translationTargetLang} onChange={event => { setCaptionTranslations({}); setAmbientTranslation(''); setTranslationTargetLang(event.target.value); }} className="eary-input mt-1 w-full rounded-lg border px-2 py-2 text-xs font-bold normal-case">
                             <option value="tr-TR">Türkçe</option>
                             <option value="de-DE">Deutsch</option>
                             <option value="en-US">English</option>
@@ -896,26 +904,21 @@ function AmbientListeningTool({ onBack, appLanguage, account }) {
                     </div>
                 ) : (
                     <div className="py-3">
-                        {hiddenCaptionCount > 0 && (
-                            <button
-                                type="button"
-                                onClick={() => setShowFullTranscript(value => !value)}
-                                className="mb-5 w-full rounded-lg border eary-line px-3 py-2 text-center text-[10px] font-bold eary-muted"
-                            >
-                                {showFullTranscript ? 'Sadece son konusmayi goster' : `${hiddenCaptionCount} onceki paragraf kayitta tutuluyor`}
-                            </button>
-                        )}
-                        {displayedCaptions.map((line, index) => (
-                            <article key={line.id} className={`${index ? 'mt-4' : ''}`}>
-                                <p className={`text-[16px] font-semibold leading-8 text-[var(--text)] ${line.live ? 'opacity-95' : ''}`}>{line.text}</p>
-                                {translateEnabled && captionTranslations[line.id] && (
-                                    <div className="mt-4 text-sm font-semibold leading-7 text-emerald-950">
-                                        <span className="mb-1 block text-[9px] font-black uppercase text-emerald-700">Ceviri - {getLanguageLabel(translationTargetLang)}</span>
-                                        {captionTranslations[line.id]}
-                                    </div>
+                        <article>
+                            <p className="whitespace-pre-wrap break-words text-[16px] font-semibold leading-8 text-[var(--text)]">{liveAmbientText}</p>
+                        </article>
+                        {translateEnabled && (
+                            <article className="mt-8 border-t eary-line pt-5">
+                                <span className="mb-3 block text-[9px] font-black uppercase text-emerald-700">Ceviri - {getLanguageLabel(translationTargetLang)}</span>
+                                {ambientTranslationLoading ? (
+                                    <p className="eary-muted text-sm font-semibold leading-7">Tum metin cevriliyor...</p>
+                                ) : ambientTranslation ? (
+                                    <p className="whitespace-pre-wrap break-words text-[15px] font-semibold leading-8 text-emerald-950">{ambientTranslation}</p>
+                                ) : (
+                                    <p className="eary-muted text-sm font-semibold leading-7">Ceviri, mikrofon kapandiginda tum metin icin hazirlanir.</p>
                                 )}
                             </article>
-                        ))}
+                        )}
                     </div>
                 )}
             </div>
