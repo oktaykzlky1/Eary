@@ -113,6 +113,14 @@ const checks = [
     message: 'Chat send path and manual input must enforce the shared character limit.',
   },
   {
+    file: files.intercom,
+    ok: contents.intercom.includes('speechSessionTextRef') &&
+      contents.intercom.includes('reconcileSpeechDraft') &&
+      contents.intercom.includes('pendingBeforeStop = commitSpeechLiveSegment() || speechSessionTextRef.current') &&
+      contents.intercom.includes('const stablePendingText = pendingText || speechSessionTextRef.current'),
+    message: 'Voice chat must keep one canonical session transcript so recognizer restarts cannot erase earlier words before send.',
+  },
+  {
     file: files.native,
     ok: contents.native.includes('stopListening("userStop", true)'),
     message: 'Native stop must remain an explicit user stop, not a recoverable speech lifecycle end.',

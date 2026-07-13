@@ -1444,6 +1444,7 @@ export default function IntercomInterface({ roomData, onLeave, language = 'tr-TR
     const interimTextRef = useRef('');
     const speechCommittedTextRef = useRef('');
     const speechLiveTextRef = useRef('');
+    const speechSessionTextRef = useRef('');
     const speechStopSentRef = useRef(false);
     const speechSessionRef = useRef(0);
     const speechOwnerRef = useRef('host');
@@ -1476,20 +1477,17 @@ export default function IntercomInterface({ roomData, onLeave, language = 'tr-TR
         return mergeSpeechTranscriptChunk(base, tail);
     };
 
-    const syncSpeechDraftFromTape = () => {
-        const draft = joinSpeechTape(speechCommittedTextRef.current, speechLiveTextRef.current);
-        finalizedSpeechRef.current = speechCommittedTextRef.current;
-        setSpeechPreview(draft);
-        return draft;
-    };
-
     const mergeSpeechTranscriptChunk = (previousText, nextText) => {
         const previous = String(previousText || '').trim();
         const next = String(nextText || '').trim();
         if (!previous) return next;
         if (!next) return previous;
-        if (next.startsWith(previous)) return next;
-        if (previous.endsWith(next)) return previous;
+        const previousKey = normalizeSpeechWords(previous).join(' ');
+        const nextKey = normalizeSpeechWords(next).join(' ');
+        if (!previousKey) return next;
+        if (!nextKey) return previous;
+        if (nextKey === previousKey || previousKey.endsWith(` ${nextKey}`) || previousKey.includes(` ${nextKey} `)) return previous;
+        if (nextKey.startsWith(`${previousKey} `)) return next;
 
         const previousWords = previous.split(/\s+/);
         const nextWords = next.split(/\s+/);
@@ -1502,6 +1500,32 @@ export default function IntercomInterface({ roomData, onLeave, language = 'tr-TR
             }
         }
         return `${previous} ${next}`.trim();
+    };
+
+    const reconcileSpeechDraft = (previousDraft, nextDraft) => {
+        const previous = String(previousDraft || '').trim();
+        const next = String(nextDraft || '').trim();
+        if (!previous) return next;
+        if (!next) return previous;
+        const previousKey = normalizeSpeechWords(previous).join(' ');
+        const nextKey = normalizeSpeechWords(next).join(' ');
+        if (!previousKey) return next;
+        if (!nextKey) return previous;
+        if (nextKey === previousKey) return previous;
+        if (nextKey.startsWith(`${previousKey} `)) return next;
+        if (previousKey.startsWith(`${nextKey} `) || previousKey.endsWith(` ${nextKey}`) || previousKey.includes(` ${nextKey} `)) return previous;
+        return mergeSpeechTranscriptChunk(previous, next);
+    };
+
+    const syncSpeechDraftFromTape = () => {
+        const tapeDraft = joinSpeechTape(speechCommittedTextRef.current, speechLiveTextRef.current);
+        const stableDraft = reconcileSpeechDraft(speechSessionTextRef.current, tapeDraft)
+            .slice(0, MAX_VOICE_MESSAGE_CHARS)
+            .trim();
+        speechSessionTextRef.current = stableDraft;
+        finalizedSpeechRef.current = speechCommittedTextRef.current || stableDraft;
+        setSpeechPreview(stableDraft);
+        return stableDraft;
     };
 
     const looksLikeFullSpeechDraft = (candidate, committed) => {
@@ -1579,6 +1603,7 @@ export default function IntercomInterface({ roomData, onLeave, language = 'tr-TR
         const nextText = words.join(' ').trim().slice(0, MAX_VOICE_MESSAGE_CHARS).trim();
         speechCommittedTextRef.current = nextText;
         speechLiveTextRef.current = '';
+        speechSessionTextRef.current = nextText;
         finalizedSpeechRef.current = nextText;
         lastCapturedTextRef.current = nextText;
         setSpeechPreview(nextText);
@@ -1589,6 +1614,7 @@ export default function IntercomInterface({ roomData, onLeave, language = 'tr-TR
         finalizedSpeechRef.current = '';
         speechCommittedTextRef.current = '';
         speechLiveTextRef.current = '';
+        speechSessionTextRef.current = '';
         clearSpeechPreview();
     };
 
@@ -1598,6 +1624,7 @@ export default function IntercomInterface({ roomData, onLeave, language = 'tr-TR
         interimTextRef.current = '';
         speechCommittedTextRef.current = '';
         speechLiveTextRef.current = '';
+        speechSessionTextRef.current = '';
         speechStopSentRef.current = false;
         ignoreSpeechResultsRef.current = false;
         clearSpeechPreview();
@@ -1995,7 +2022,6 @@ export default function IntercomInterface({ roomData, onLeave, language = 'tr-TR
             }
             if (ignoreSpeechResultsRef.current || speechStopSentRef.current) {
                 setIsListening(false);
-                resetSpeechCapture();
                 stopActiveStream();
                 return;
             }
@@ -2012,13 +2038,14 @@ export default function IntercomInterface({ roomData, onLeave, language = 'tr-TR
                 return;
             }
             const pendingText = commitSpeechLiveSegment();
+            const stablePendingText = pendingText || speechSessionTextRef.current;
             setIsListening(false);
             clearSpeechPreview();
             stopActiveStream();
             playBeep('stop');
 
-            if (pendingText) {
-                sendCapturedSpeechText(pendingText, lang);
+            if (stablePendingText) {
+                sendCapturedSpeechText(stablePendingText, lang);
             } else {
                 lastCapturedTextRef.current = '';
                 finalizedSpeechRef.current = '';
@@ -2047,6 +2074,7 @@ export default function IntercomInterface({ roomData, onLeave, language = 'tr-TR
                 errorStr.includes("canceled")
             ) {
                 commitSpeechLiveSegment();
+                syncSpeechDraftFromTape();
                 if (isListeningRef.current) setIsListening(true);
                 return;
             }
@@ -2095,7 +2123,7 @@ export default function IntercomInterface({ roomData, onLeave, language = 'tr-TR
         if (isListeningRef.current) {
             const rec = recognitionRef.current;
             if (!rec) return;
-            const pendingBeforeStop = commitSpeechLiveSegment();
+            const pendingBeforeStop = commitSpeechLiveSegment() || speechSessionTextRef.current;
             ignoreSpeechResultsRef.current = true;
             speechStartInFlightRef.current = true;
             setIsSpeechStarting(false);
@@ -2198,6 +2226,7 @@ export default function IntercomInterface({ roomData, onLeave, language = 'tr-TR
         interimTextRef.current = '';
         speechCommittedTextRef.current = '';
         speechLiveTextRef.current = '';
+        speechSessionTextRef.current = '';
         clearSpeechPreview();
         playBeep('stop');
         try {
