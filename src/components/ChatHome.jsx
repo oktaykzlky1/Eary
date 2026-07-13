@@ -816,7 +816,17 @@ export default function ChatHome(props) {
             setContactMatches([...new Map(checked.filter(item => item.profile).map(item => [item.profile.username, item])).values()]);
             setInviteContacts(checked.filter(item => !item.profile).slice(0, 50));
         } catch (error) {
-            setContactsError(error.message || 'Rehber açılamadı.');
+            const message = String(error?.message || error || '');
+            const normalizedMessage = message.toLowerCase();
+            if (normalizedMessage.includes('not implemented')) {
+                setContactsError('Bu cihazda rehber bağlantısı açılamadı. Davet bağlantısını paylaşabilir veya kişiyi kullanıcı adıyla arayabilirsiniz.');
+            } else if (message.includes('CONTACTS_PERMISSION_DENIED') || normalizedMessage.includes('izin') || normalizedMessage.includes('permission')) {
+                setContactsError('Rehber izni verilmedi. İsterseniz davet bağlantısını paylaşabilir veya kişiyi kullanıcı adıyla arayabilirsiniz.');
+            } else if (message.includes('CONTACTS_OPEN_FAILED')) {
+                setContactsError('Rehber açılamadı. Davet bağlantısını paylaşabilir veya kişiyi kullanıcı adıyla arayabilirsiniz.');
+            } else {
+                setContactsError(message || 'Rehber açılamadı.');
+            }
         } finally {
             setContactsLoading(false);
         }

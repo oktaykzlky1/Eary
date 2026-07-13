@@ -12,6 +12,9 @@ const files = {
   sidebar: 'src/components/Sidebar.jsx',
   app: 'src/App.jsx',
   native: 'android/app/src/main/java/com/asleyduo/app/EarySpeechPlugin.java',
+  contactsNative: 'android/app/src/main/java/com/asleyduo/app/EaryContactsPlugin.java',
+  mainActivity: 'android/app/src/main/java/com/asleyduo/app/MainActivity.java',
+  androidManifest: 'android/app/src/main/AndroidManifest.xml',
   voiceSettings: 'android/app/src/main/java/com/asleyduo/app/VoiceSettingsPlugin.java',
 };
 
@@ -131,6 +134,16 @@ const checks = [
       contents.newConversation.includes('Gruba eklemek için kişi ara') &&
       contents.newConversation.includes('En az 2 kişi seçin'),
     message: 'New conversation flow must separate copy/share, explain accepted invites, and make group member selection explicit.',
+  },
+  {
+    file: files.contactsNative,
+    ok: contents.contactsNative.includes('@CapacitorPlugin(') &&
+      contents.contactsNative.includes('name = "EaryContacts"') &&
+      contents.contactsNative.includes('Manifest.permission.READ_CONTACTS') &&
+      contents.contactsNative.includes('ContactsContract.CommonDataKinds.Phone.CONTENT_URI') &&
+      contents.mainActivity.includes('registerPlugin(EaryContactsPlugin.class)') &&
+      contents.androidManifest.includes('android.permission.READ_CONTACTS'),
+    message: 'Android EaryContacts plugin must be implemented, registered, and protected by READ_CONTACTS permission.',
   },
   {
     file: files.hub,
