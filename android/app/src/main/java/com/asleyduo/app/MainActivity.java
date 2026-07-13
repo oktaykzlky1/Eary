@@ -8,7 +8,6 @@ public class MainActivity extends BridgeActivity {
     protected void onCreate(Bundle savedInstanceState) {
         registerPlugin(EarySpeechPlugin.class);
         registerPlugin(VoiceSettingsPlugin.class);
-        registerPlugin(EaryContactsPlugin.class);
         super.onCreate(savedInstanceState);
     }
 }

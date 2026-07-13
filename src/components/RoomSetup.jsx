@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { History, MessageSquare, Shield, User, Trash2, Menu } from 'lucide-react';
 import {
     db, ref, set, get, getRest, updateRest, remove, onValue, update, query, limitToLast
@@ -42,6 +42,14 @@ const TRANSLATIONS = {
 
 const LAST_MESSAGES_CACHE_KEY = 'eary_last_messages_v1';
 const LOCAL_USERNAME_KEY = 'eary_local_username_v1';
+const PENDING_INVITE_KEY = 'eary_pending_invite_v1';
+
+const sanitizeInviteUsername = value => String(value || '')
+    .trim()
+    .replace(/^@/, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, '')
+    .slice(0, 24);
 
 const makeLocalUsername = () => {
     const stored = localStorage.getItem(LOCAL_USERNAME_KEY);
@@ -91,6 +99,7 @@ export default function RoomSetup({ onJoin, language, onLanguageChange, theme, o
     const [activeFilter, setActiveFilter] = useState('all'); // 'all', 'unread', 'active', 'past'
     const [lastMessages, setLastMessages] = useState(readLastMessagesCache);
     const [presenceData, setPresenceData] = useState({});
+    const pendingInviteSyncRef = useRef(false);
 
     const setSpeechLang = nextLanguage => {
         const normalized = normalizeAppLanguage(nextLanguage);
@@ -376,6 +385,95 @@ export default function RoomSetup({ onJoin, language, onLanguageChange, theme, o
     }, [account?.username]);
 
     useEffect(() => {
+        if (!account?.username || pendingInviteSyncRef.current) return undefined;
+        let cancelled = false;
+
+        const syncPendingInvite = async () => {
+            let pendingInvite;
+            try {
+                pendingInvite = JSON.parse(localStorage.getItem(PENDING_INVITE_KEY) || 'null');
+            } catch {
+                localStorage.removeItem(PENDING_INVITE_KEY);
+                return;
+            }
+            const inviterUsername = sanitizeInviteUsername(pendingInvite?.inviterUsername);
+            if (!inviterUsername) {
+                localStorage.removeItem(PENDING_INVITE_KEY);
+                return;
+            }
+            if (inviterUsername === account.username) {
+                localStorage.removeItem(PENDING_INVITE_KEY);
+                return;
+            }
+
+            pendingInviteSyncRef.current = true;
+            try {
+                const [publicProfile, legacyProfile, sentValue] = await Promise.all([
+                    getRest(`publicProfiles/${inviterUsername}`, { timeoutMs: 6000 }),
+                    getRest(`users/${inviterUsername}/profile`, { timeoutMs: 6000 }),
+                    getRest(`sentMessageRequests/${account.username}`, { timeoutMs: 6000 }).catch(() => null)
+                ]);
+                const inviterProfile = publicProfile || legacyProfile;
+                if (!inviterProfile) {
+                    localStorage.removeItem(PENDING_INVITE_KEY);
+                    if (!cancelled) window.dispatchEvent(new CustomEvent('eary:toast', { detail: 'Davet bağlantısı geçerli bir Eary profiline ait değil' }));
+                    return;
+                }
+
+                const sentRequests = Object.values(sentValue || {});
+                if (sentRequests.some(request => request.toUsername === inviterUsername && ['pending', 'accepted'].includes(request.status))) {
+                    localStorage.removeItem(PENDING_INVITE_KEY);
+                    return;
+                }
+
+                const timestamp = Date.now();
+                const inviterNickname = inviterProfile.nickname || inviterUsername;
+                const roomId = `dm-${[account.username, inviterUsername].sort().join('-')}`;
+                const existingRoom = await getRest(`rooms/${roomId}`, { timeoutMs: 6000 }).catch(() => null);
+                const roomPin = existingRoom?.pin || String(Math.floor(100000 + Math.random() * 900000));
+                const requestId = `invite_${account.username}_${inviterUsername}`;
+                await updateRest({
+                    [`rooms/${roomId}/pin`]: roomPin,
+                    [`rooms/${roomId}/type`]: 'intercom_only',
+                    [`rooms/${roomId}/members/${account.username}`]: true,
+                    [`rooms/${roomId}/members/${inviterUsername}`]: true,
+                    [`rooms/${roomId}/metadata/kind`]: 'direct',
+                    [`rooms/${roomId}/metadata/memberCount`]: 2,
+                    [`rooms/${roomId}/metadata/memberNames/${account.username}`]: account.nickname,
+                    [`rooms/${roomId}/metadata/memberNames/${inviterUsername}`]: inviterNickname,
+                    [`rooms/${roomId}/metadata/createdAt`]: existingRoom?.metadata?.createdAt || timestamp,
+                    [`messageRequests/${inviterUsername}/${requestId}`]: {
+                        fromUsername: account.username,
+                        fromNickname: account.nickname,
+                        roomId,
+                        roomPin,
+                        status: 'pending',
+                        source: 'invite_link',
+                        createdAt: timestamp
+                    },
+                    [`sentMessageRequests/${account.username}/${requestId}`]: {
+                        toUsername: inviterUsername,
+                        toNickname: inviterNickname,
+                        roomId,
+                        status: 'pending',
+                        source: 'invite_link',
+                        createdAt: timestamp
+                    }
+                });
+                localStorage.removeItem(PENDING_INVITE_KEY);
+                if (!cancelled) window.dispatchEvent(new CustomEvent('eary:toast', { detail: `${inviterNickname} için sohbet isteği gönderildi` }));
+            } catch (error) {
+                pendingInviteSyncRef.current = false;
+                console.error('Pending invite sync failed:', error);
+                if (!cancelled) window.dispatchEvent(new CustomEvent('eary:toast', { detail: 'Davet isteği gönderilemedi. Bağlantıyı tekrar açabilirsiniz.' }));
+            }
+        };
+
+        syncPendingInvite();
+        return () => { cancelled = true; };
+    }, [account?.nickname, account?.username]);
+
+    useEffect(() => {
         const handleBack = event => {
             if (!isSidebarOpen) return;
             event.preventDefault();
@@ -421,7 +519,7 @@ export default function RoomSetup({ onJoin, language, onLanguageChange, theme, o
 
     // Load room history on mount
     useEffect(() => {
-        const invitedUsername = new URLSearchParams(window.location.search).get('invite');
+        const invitedUsername = sanitizeInviteUsername(new URLSearchParams(window.location.search).get('invite'));
         // Load local history
         const savedHistory = localStorage.getItem('duotalk_history');
         let localHistory = [];
@@ -464,8 +562,12 @@ export default function RoomSetup({ onJoin, language, onLanguageChange, theme, o
             setAuthMode('room');
         }
         if (invitedUsername) {
-            setSearchQuery(`@${invitedUsername}`);
+            localStorage.setItem(PENDING_INVITE_KEY, JSON.stringify({
+                inviterUsername: invitedUsername,
+                createdAt: Date.now()
+            }));
             setShowNewRoomForm(false);
+            window.history.replaceState({}, document.title, `${window.location.pathname}${window.location.hash || ''}`);
         }
     }, []);
 

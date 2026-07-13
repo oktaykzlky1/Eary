@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import {
-    ArrowLeft, AtSign, BookUser, Check, Copy, Link, Search, Send, Share2, UserPlus, UsersRound, X
+    ArrowLeft, AtSign, Check, Copy, Link, Search, Send, Share2, UserPlus, UsersRound, X
 } from 'lucide-react';
 import { getRest } from '../firebase';
 import { buildInviteText, buildInviteUrl, copyInviteLink, shareInviteLink } from '../utils/shareInvite';
@@ -21,7 +21,7 @@ const normalizeProfile = (username, profile = {}) => ({
     discoverable: profile.discoverable ?? profile.privacy?.discoverByUsername !== 'nobody'
 });
 
-export default function NewConversation({ account, onBack, onOpenContacts, onSendRequest, onCreateGroup }) {
+export default function NewConversation({ account, onBack, onSendRequest, onCreateGroup }) {
     const [mode, setMode] = useState('person');
     const [query, setQuery] = useState('');
     const [results, setResults] = useState([]);
@@ -179,7 +179,7 @@ export default function NewConversation({ account, onBack, onOpenContacts, onSen
                         <span className="eary-brand-soft flex h-11 w-11 shrink-0 items-center justify-center rounded-lg"><Link size={20} /></span>
                         <div className="min-w-0 flex-1">
                             <h2 className="text-sm font-black">Davet bağlantısı</h2>
-                            <p className="eary-muted mt-1 text-[11px] font-semibold leading-4">Eary kullanmayan kişiye gönder. Bağlantıyı açınca size sohbet isteği olarak gelir.</p>
+                            <p className="eary-muted mt-1 text-[11px] font-semibold leading-4">Eary kullanmayan kişiye gönder. Profilini oluşturduktan sonra linke dokunursa size sohbet isteği gelir.</p>
                         </div>
                     </div>
                     <div className="eary-soft eary-line mt-3 rounded-lg border px-3 py-2">
@@ -188,14 +188,6 @@ export default function NewConversation({ account, onBack, onOpenContacts, onSen
                     <div className="mt-3 grid grid-cols-2 gap-2">
                         <button type="button" onClick={copyInvite} className="eary-soft eary-brand flex items-center justify-center gap-2 rounded-lg py-2.5 text-xs font-black"><Copy size={16} /> {inviteCopied ? 'Kopyalandı' : 'Kopyala'}</button>
                         <button type="button" onClick={shareInvite} className="eary-brand-bg flex items-center justify-center gap-2 rounded-lg py-2.5 text-xs font-black"><Share2 size={16} /> Paylaş</button>
-                    </div>
-                    <div className="mt-3 grid grid-cols-3 gap-2 text-center">
-                        {['İstek gelir', 'Kabul edilir', 'Sohbet açılır'].map((step, index) => (
-                            <div key={step} className="rounded-lg bg-[var(--soft)] px-2 py-2">
-                                <p className="eary-brand text-[10px] font-black">{index + 1}</p>
-                                <p className="eary-muted mt-0.5 text-[9px] font-bold leading-3">{step}</p>
-                            </div>
-                        ))}
                     </div>
                 </div>
             </section>
@@ -211,7 +203,7 @@ export default function NewConversation({ account, onBack, onOpenContacts, onSen
                     <p className="eary-muted mt-1 text-[11px] font-semibold leading-4">
                         {mode === 'group'
                             ? 'Önce grup adını yazın, sonra kişileri arayıp artı butonuyla seçin. En az 2 kişi seçmek gerekir.'
-                            : 'Eary profili olan kişiyi arayın veya telefon rehberinden güvenli eşleştirme yapın.'}
+                            : 'Eary profili olan kişiyi görünen adı veya kullanıcı adıyla arayın.'}
                     </p>
                 </div>
 
@@ -232,18 +224,9 @@ export default function NewConversation({ account, onBack, onOpenContacts, onSen
 
                 <div className="relative mt-3">
                     <Search size={18} className="eary-muted absolute left-3 top-3"/>
-                    <input value={query} onChange={event => setQuery(event.target.value)} autoFocus className="eary-input w-full rounded-lg border py-2.5 pl-10 pr-9 text-sm font-semibold" placeholder={searchPlaceholder}/>
+                    <input value={query} onChange={event => setQuery(event.target.value)} className="eary-input w-full rounded-lg border py-2.5 pl-10 pr-9 text-sm font-semibold" placeholder={searchPlaceholder}/>
                     {query && <button type="button" onClick={() => setQuery('')} className="eary-muted absolute right-3 top-2.5"><X size={18}/></button>}
                 </div>
-                {mode === 'person' && (
-                    <button type="button" onClick={onOpenContacts} className="eary-soft eary-brand mt-3 flex w-full items-center gap-3 rounded-lg px-3 py-3 text-left">
-                        <BookUser size={19}/>
-                        <span>
-                            <span className="block text-xs font-black">Telefon rehberinden bul</span>
-                            <span className="eary-muted block text-[9px] font-semibold">İlk kullanımda rehber izni istenir; numaralar profilde gösterilmez</span>
-                        </span>
-                    </button>
-                )}
             </section>
 
             <section className="flex-1 overflow-y-auto px-4 pb-24">
@@ -262,7 +245,7 @@ export default function NewConversation({ account, onBack, onOpenContacts, onSen
                         <p className="eary-muted mt-1 text-xs font-semibold leading-5">
                             {mode === 'group'
                                 ? 'Aramada çıkan kişileri artı butonuyla seçin. Davet kabul edilince grup sohbetinde görünürler.'
-                                : 'İstek kabul edilince sohbet otomatik olarak Sohbetler ekranında görünür.'}
+                                : 'Linki alan kişi profilini oluşturup açtığında size sohbet isteği gelir. Kabul edince sohbet otomatik olarak Sohbetler ekranında görünür.'}
                         </p>
                     </div>
                 )}

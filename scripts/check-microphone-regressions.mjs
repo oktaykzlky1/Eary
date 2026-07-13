@@ -13,7 +13,6 @@ const files = {
   app: 'src/App.jsx',
   shareInvite: 'src/utils/shareInvite.js',
   native: 'android/app/src/main/java/com/asleyduo/app/EarySpeechPlugin.java',
-  contactsNative: 'android/app/src/main/java/com/asleyduo/app/EaryContactsPlugin.java',
   mainActivity: 'android/app/src/main/java/com/asleyduo/app/MainActivity.java',
   androidManifest: 'android/app/src/main/AndroidManifest.xml',
   voiceSettings: 'android/app/src/main/java/com/asleyduo/app/VoiceSettingsPlugin.java',
@@ -133,20 +132,23 @@ const checks = [
       contents.newConversation.includes('copyInviteLink(inviteUrl)') &&
       contents.shareInvite.includes('@capacitor/share') &&
       contents.shareInvite.includes('Share.share(payload)') &&
-      contents.newConversation.includes('Kabul edilince sohbet otomatik olarak Sohbetler') &&
+      contents.newConversation.includes('Kabul edince sohbet otomatik olarak Sohbetler') &&
       contents.newConversation.includes('Gruba eklemek için kişi ara') &&
-      contents.newConversation.includes('En az 2 kişi seçin'),
+      contents.newConversation.includes('En az 2 kişi seçin') &&
+      contents.newConversation.includes('Profilini oluşturduktan sonra linke dokunursa'),
     message: 'New conversation flow must separate copy/share, explain accepted invites, and make group member selection explicit.',
   },
   {
-    file: files.contactsNative,
-    ok: contents.contactsNative.includes('@CapacitorPlugin(') &&
-      contents.contactsNative.includes('name = "EaryContacts"') &&
-      contents.contactsNative.includes('Manifest.permission.READ_CONTACTS') &&
-      contents.contactsNative.includes('ContactsContract.CommonDataKinds.Phone.CONTENT_URI') &&
-      contents.mainActivity.includes('registerPlugin(EaryContactsPlugin.class)') &&
-      contents.androidManifest.includes('android.permission.READ_CONTACTS'),
-    message: 'Android EaryContacts plugin must be implemented, registered, and protected by READ_CONTACTS permission.',
+    file: files.newConversation,
+    ok: !contents.newConversation.includes('onOpenContacts') &&
+      !contents.newConversation.includes('autoFocus') &&
+      !contents.newConversation.includes('Telefon rehberinden bul') &&
+      !contents.newConversation.includes('İstek gelir') &&
+      !contents.chatHome.includes('EaryContacts') &&
+      !contents.chatHome.includes('openContactPicker') &&
+      !contents.mainActivity.includes('EaryContactsPlugin') &&
+      !contents.androidManifest.includes('android.permission.READ_CONTACTS'),
+    message: 'New conversation must not open contacts, autofocus search, or keep stale invite step labels.',
   },
   {
     file: files.hub,

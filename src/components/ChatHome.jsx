@@ -1,9 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
     ArrowLeft, BellOff, Captions, ChevronRight, Languages, LockKeyhole, MessageCircle, MessageSquarePlus,
-    Check, Menu, Mic, Pencil, Save, Search, Send, Settings, Share2, Sparkles, Star, Trash2, UserPlus, UserRound, X
+    Check, Menu, Mic, Pencil, Save, Search, Send, Settings, Share2, Sparkles, Star, Trash2, UserRound, X
 } from 'lucide-react';
-import { Capacitor, registerPlugin } from '@capacitor/core';
 import { db, ref, get, getRest, onValue, push, update, updateRest } from '../firebase';
 import { getDeviceId } from '../utils/pushNotifications';
 import { sha256Hex } from '../utils/hash';
@@ -102,14 +101,11 @@ const HOME_MODE_I18N = {
 const getHomeModes = language => HOME_MODE_I18N[normalizeAppLanguage(language)] || HOME_MODES;
 const normalizeHomeMode = value => ['face', 'ambient', 'chats'].includes(value) ? value : 'ambient';
 
-import { normalizePhone, phoneLookupKey } from '../utils/identity';
+import { phoneLookupKey } from '../utils/identity';
 import { normalizeAppLanguage } from '../utils/language';
 import { uiText } from '../utils/i18n';
-import { buildInviteText, buildInviteUrl, shareInviteLink } from '../utils/shareInvite';
 import AccessibilityHub from './AccessibilityHub';
 import NewConversation from './NewConversation';
-
-const EaryContacts = registerPlugin('EaryContacts');
 
 const AVATAR_COLORS = ['#dceee9', '#e8e2f3', '#f4e4d7', '#dce9f4', '#f2dfe5'];
 
@@ -511,11 +507,6 @@ export default function ChatHome(props) {
     const [requestAction, setRequestAction] = useState(null);
     const [requestSendingUsername, setRequestSendingUsername] = useState('');
     const [requestSentUsername, setRequestSentUsername] = useState('');
-    const [showContacts, setShowContacts] = useState(false);
-    const [contactsLoading, setContactsLoading] = useState(false);
-    const [contactMatches, setContactMatches] = useState([]);
-    const [inviteContacts, setInviteContacts] = useState([]);
-    const [contactsError, setContactsError] = useState('');
     const [homeTab, setHomeTab] = useState(() => localStorage.getItem('eary_home_tab') || 'accessibility');
     const [activeHomeMode, setActiveHomeMode] = useState(() => normalizeHomeMode(localStorage.getItem('eary_home_mode') || 'ambient'));
     const [activeToolView, setActiveToolView] = useState(null);
@@ -690,10 +681,7 @@ export default function ChatHome(props) {
 
     useEffect(() => {
         const handleBack = event => {
-            if (showContacts) {
-                event.preventDefault();
-                setShowContacts(false);
-            } else if (lockedTarget) {
+            if (lockedTarget) {
                 event.preventDefault();
                 setLockedTarget(null);
             } else if (selectedChatIds.length) {
@@ -715,7 +703,7 @@ export default function ChatHome(props) {
         };
         window.addEventListener('eary:back', handleBack);
         return () => window.removeEventListener('eary:back', handleBack);
-    }, [activeToolView, activityDetail, homeTab, lockedTarget, openHomeTab, returnToPremiumHome, selectedChatIds.length, setShowNewRoomForm, showContacts, showNewRoomForm]);
+    }, [activeToolView, activityDetail, homeTab, lockedTarget, openHomeTab, returnToPremiumHome, selectedChatIds.length, setShowNewRoomForm, showNewRoomForm]);
 
     useEffect(() => {
         if (!account) { setMessageRequests([]); return undefined; }
@@ -786,66 +774,6 @@ export default function ChatHome(props) {
         }, 350);
         return () => clearTimeout(timer);
     }, [account, searchQuery]);
-
-    const openContactPicker = async () => {
-        setShowContacts(true); setContactsLoading(true); setContactsError(''); setContactMatches([]); setInviteContacts([]);
-        try {
-            let contacts = [];
-            let countryIso = '';
-            if (Capacitor.isNativePlatform()) {
-                const result = await EaryContacts.getContacts();
-                contacts = result.contacts || [];
-                countryIso = result.countryIso || '';
-            } else if (navigator.contacts?.select) {
-                const selected = await navigator.contacts.select(['name', 'tel'], { multiple: true });
-                contacts = selected.flatMap(contact => (contact.tel || []).map(phone => ({ name: contact.name?.[0] || 'Kişi', phone })));
-            } else {
-                setContactsError('Bu tarayıcı rehber seçimini desteklemiyor. Telefon numarasını arama alanına yazarak arayabilir veya davet bağlantınızı paylaşabilirsiniz.');
-                return;
-            }
-            const unique = [...new Map(contacts.map(contact => [normalizePhone(contact.phone, countryIso), { ...contact, normalizedPhone: normalizePhone(contact.phone, countryIso) }])).values()].filter(contact => contact.normalizedPhone).slice(0, 500);
-            const checked = await Promise.all(unique.map(async contact => {
-                const entry = (await get(ref(db, `phoneDirectory/${await phoneLookupKey(contact.normalizedPhone)}`))).val();
-                if (!entry?.username || entry.username === account.username) return { contact };
-                let profile = (await get(ref(db, `publicProfiles/${entry.username}`))).val();
-                if (!profile) {
-                    const legacyProfile = (await get(ref(db, `users/${entry.username}/profile`))).val();
-                    profile = legacyProfile ? normalizeProfile(entry.username, legacyProfile) : null;
-                }
-                return profile ? { contact, profile: normalizeProfile(entry.username, profile) } : { contact };
-            }));
-            setContactMatches([...new Map(checked.filter(item => item.profile).map(item => [item.profile.username, item])).values()]);
-            setInviteContacts(checked.filter(item => !item.profile).slice(0, 50));
-        } catch (error) {
-            const message = String(error?.message || error || '');
-            const normalizedMessage = message.toLowerCase();
-            if (normalizedMessage.includes('not implemented')) {
-                setContactsError('Bu cihazda rehber bağlantısı açılamadı. Davet bağlantısını paylaşabilir veya kişiyi kullanıcı adıyla arayabilirsiniz.');
-            } else if (message.includes('CONTACTS_PERMISSION_DENIED') || normalizedMessage.includes('izin') || normalizedMessage.includes('permission')) {
-                setContactsError('Rehber izni verilmedi. İsterseniz davet bağlantısını paylaşabilir veya kişiyi kullanıcı adıyla arayabilirsiniz.');
-            } else if (message.includes('CONTACTS_OPEN_FAILED')) {
-                setContactsError('Rehber açılamadı. Davet bağlantısını paylaşabilir veya kişiyi kullanıcı adıyla arayabilirsiniz.');
-            } else {
-                setContactsError(message || 'Rehber açılamadı.');
-            }
-        } finally {
-            setContactsLoading(false);
-        }
-    };
-
-    const inviteContact = async contact => {
-        const inviteUrl = buildInviteUrl(account?.username);
-        const inviteText = `${buildInviteText(account)}${contact?.name ? ` (${contact.name})` : ''}`;
-        const result = await shareInviteLink({ inviteUrl, inviteText });
-        if (result.status === 'copied') setToast('Paylaşım açılamadı; davet bağlantısı kopyalandı');
-    };
-
-    const shareGeneralInvite = async () => {
-        const inviteUrl = buildInviteUrl(account?.username);
-        const result = await shareInviteLink({ inviteUrl, inviteText: buildInviteText(account) });
-        if (result.status === 'shared') setToast('Paylaşım seçenekleri açıldı');
-        if (result.status === 'copied') setToast('Paylaşım açılamadı; davet bağlantısı kopyalandı');
-    };
 
     const sendMessageRequest = async profile => {
         if (!account || requestSendingUsername) return false;
@@ -1090,7 +1018,7 @@ export default function ChatHome(props) {
             </div>
         );
     };
-    if (showNewRoomForm) return <NewConversation account={account} onBack={() => setShowNewRoomForm(false)} onOpenContacts={() => { setShowNewRoomForm(false); openContactPicker(); }} onSendRequest={sendMessageRequest} onCreateGroup={createGroup} />;
+    if (showNewRoomForm) return <NewConversation account={account} onBack={() => setShowNewRoomForm(false)} onSendRequest={sendMessageRequest} onCreateGroup={createGroup} />;
     if (homeTab === 'accessibility' && activityDetail) {
         return <ActivityDetailView activity={activityDetail} onBack={returnToPremiumHome} />;
     }
@@ -1180,7 +1108,6 @@ export default function ChatHome(props) {
                 <button type="button" onClick={onOpenSettings} className="eary-muted flex flex-col items-center gap-1 text-[10px] font-semibold"><Settings size={20} />{text.navSettings}</button>
             </nav>
             {lockedTarget && <div className="absolute inset-0 z-50 flex items-end bg-black/35" onClick={() => setLockedTarget(null)}><form onSubmit={unlockChat} onClick={event => event.stopPropagation()} className="eary-shell w-full rounded-t-xl p-5 shadow-2xl"><div className="mb-4 flex items-center gap-3"><span className="eary-brand-soft flex h-10 w-10 items-center justify-center rounded-lg"><LockKeyhole size={19} /></span><div><h2 className="font-bold">Sohbet kilitli</h2><p className="eary-muted text-xs">{lockedTarget.roomId} için 4 haneli PIN’i girin.</p></div></div><input value={unlockPin} onChange={event => setUnlockPin(event.target.value.replace(/\D/g, '').slice(0, 4))} inputMode="numeric" type="password" autoFocus className="eary-input w-full rounded-lg border px-3 py-3 text-center text-lg tracking-[0.5em]" placeholder="••••" />{unlockError && <p className="mt-2 text-xs font-semibold text-rose-600">{unlockError}</p>}<button type="submit" disabled={unlockPin.length !== 4} className="eary-brand-bg mt-4 w-full rounded-lg py-3 text-sm font-bold disabled:opacity-40">Sohbeti aç</button></form></div>}
-            {showContacts && <div className="absolute inset-0 z-[80] flex items-end bg-black/35" onClick={() => setShowContacts(false)}><section className="eary-shell flex max-h-[82%] w-full flex-col rounded-t-xl shadow-2xl" onClick={event => event.stopPropagation()}><header className="flex items-center justify-between border-b eary-line px-4 py-4"><div><h2 className="font-bold">Rehberden bul</h2><p className="eary-muted text-[10px]">Numaralar gösterilmeden güvenli biçimde eşleştirilir</p></div><button type="button" onClick={() => setShowContacts(false)} className="eary-soft eary-muted flex h-9 w-9 items-center justify-center rounded-lg"><X size={18} /></button></header><div className="flex-1 overflow-y-auto p-4">{contactsLoading && <div className="eary-muted py-10 text-center text-sm">Rehber eşleştiriliyor…</div>}{contactsError && <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800"><p>{contactsError}</p><button type="button" onClick={shareGeneralInvite} className="mt-3 rounded-lg bg-amber-100 px-3 py-2 font-bold">Davet bağlantısını paylaş</button></div>}{!contactsLoading && !contactsError && <><h3 className="mb-2 text-xs font-bold">Eary kullananlar ({contactMatches.length})</h3>{contactMatches.length ? contactMatches.map(({ contact, profile }) => <div key={profile.username} className="flex items-center gap-3 border-b eary-line py-3"><span className="eary-brand-soft flex h-10 w-10 items-center justify-center rounded-full text-xs font-bold">{profile.nickname?.slice(0,2).toUpperCase()}</span><div className="min-w-0 flex-1"><p className="truncate text-sm font-semibold">{contact.name}</p><p className="eary-muted text-[10px]">{profile.nickname} · Davet profili</p></div><button type="button" onClick={() => sendMessageRequest(profile)} className="eary-brand-bg flex h-9 items-center gap-1 rounded-lg px-3 text-[10px] font-bold"><UserPlus size={14} /> İstek</button></div>) : <p className="eary-muted py-4 text-xs">Rehberinizde telefonla bulunmayı açmış bir Eary kullanıcısı yok.</p>}<h3 className="mb-2 mt-5 text-xs font-bold">Eary’ye davet et</h3>{inviteContacts.slice(0, 12).map(({ contact }) => <div key={`${contact.name}-${contact.normalizedPhone}`} className="flex items-center gap-3 border-b eary-line py-3"><span className="eary-soft flex h-9 w-9 items-center justify-center rounded-full"><UserRound size={16} /></span><p className="min-w-0 flex-1 truncate text-sm font-semibold">{contact.name}</p><button type="button" onClick={() => inviteContact(contact)} className="eary-soft eary-brand rounded-lg px-3 py-2 text-[10px] font-bold">Davet et</button></div>)}</>}</div></section></div>}
             {toast && <div className="absolute bottom-20 left-1/2 z-[70] -translate-x-1/2 whitespace-nowrap rounded-full bg-[#17221f] px-4 py-2 text-xs font-semibold text-white shadow-xl">{toast}</div>}
         </main>
     );
