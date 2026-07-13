@@ -49,6 +49,15 @@ function LanguageGate({ language, onSelect }) {
     );
 }
 
+const shouldSuppressGlobalToast = detail => {
+    const value = String(detail || '').toLocaleLowerCase('tr-TR');
+    return value.includes('permission_denied')
+        || value.includes('permission denied')
+        || value.includes('bulut izin')
+        || (value.includes('bulut') && value.includes('yenilen'))
+        || (value.includes('cloud') && value.includes('permission'));
+};
+
 export default function App() {
     const [theme, setTheme] = useState(() => localStorage.getItem('eary_theme') || 'light');
     const [onlineVisibility, setOnlineVisibility] = useState(() => localStorage.getItem('eary_online_visibility') || 'everyone');
@@ -68,6 +77,10 @@ export default function App() {
     useEffect(() => {
         let timer;
         const showToast = event => {
+            if (shouldSuppressGlobalToast(event.detail)) {
+                console.warn('Suppressed background cloud permission toast:', event.detail);
+                return;
+            }
             setGlobalToast(event.detail || '');
             clearTimeout(timer);
             timer = setTimeout(() => setGlobalToast(''), 2600);

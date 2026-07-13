@@ -1461,13 +1461,6 @@ export default function IntercomInterface({ roomData, onLeave, language = 'tr-TR
         setInterimText('');
     };
 
-    const getPendingSpeechText = () => (
-        lastCapturedTextRef.current ||
-        interimTextRef.current ||
-        finalizedSpeechRef.current ||
-        ''
-    ).trim();
-
     const mergeSpeechTranscriptChunk = (previousText, nextText) => {
         const previous = String(previousText || '').trim();
         const next = String(nextText || '').trim();
@@ -1487,6 +1480,18 @@ export default function IntercomInterface({ roomData, onLeave, language = 'tr-TR
             }
         }
         return `${previous} ${next}`.trim();
+    };
+
+    const getPendingSpeechText = () => {
+        const finalized = String(finalizedSpeechRef.current || '').trim();
+        const live = String(interimTextRef.current || lastCapturedTextRef.current || '').trim();
+        return (
+            mergeSpeechTranscriptChunk(finalized, live)
+            || lastCapturedTextRef.current
+            || interimTextRef.current
+            || finalizedSpeechRef.current
+            || ''
+        ).trim();
     };
     const resetSpeechCapture = () => {
         lastCapturedTextRef.current = '';

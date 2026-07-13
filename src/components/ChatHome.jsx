@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
-    BellOff, Captions, ChevronRight, Languages, LockKeyhole, MessageCircle, MessageSquarePlus,
+    ArrowLeft, BellOff, Captions, ChevronRight, Languages, LockKeyhole, MessageCircle, MessageSquarePlus,
     Menu, Mic, Search, Send, Settings, Sparkles, Star, Trash2, UserPlus, UserRound, X
 } from 'lucide-react';
 import { Capacitor, registerPlugin } from '@capacitor/core';
@@ -218,6 +218,61 @@ function PremiumHome({ activeMode, setActiveMode, onLaunchMode, onOpenChats, onO
     );
 }
 
+const activityText = activity => String(
+    activity?.transcriptText
+    || activity?.processedText
+    || activity?.preview
+    || ''
+).trim();
+
+function ActivityDetailView({ activity, onBack }) {
+    const isFace = activity?.type === 'face';
+    const messages = Array.isArray(activity?.messages) ? activity.messages.filter(message => message?.text) : [];
+    const fallbackText = activityText(activity);
+    const title = activity?.title || (isFace ? 'Yüz yüze görüşme' : 'Ortam dinleme');
+    const createdAt = Number(activity?.createdAt || 0);
+
+    return (
+        <main className="eary-shell eary-line relative mx-auto flex h-screen w-full max-w-md flex-col overflow-hidden bg-[var(--surface)] sm:h-[780px] sm:rounded-xl sm:border sm:shadow-xl">
+            <header className="eary-ios-safe-header flex items-center gap-3 border-b eary-line px-4 pb-3">
+                <button type="button" onClick={onBack} className="eary-soft eary-muted flex h-10 w-10 shrink-0 items-center justify-center rounded-lg" title="Geri"><ArrowLeft size={20} /></button>
+                <div className="min-w-0 flex-1">
+                    <p className="eary-muted text-[10px] font-black uppercase">{isFace ? 'Konuşma transkripti' : 'Ortam transkripti'}</p>
+                    <h1 className="truncate text-base font-black">{title}</h1>
+                    {createdAt > 0 && <p className="eary-muted mt-0.5 text-[10px] font-semibold">{new Date(createdAt).toLocaleString('tr-TR')}</p>}
+                </div>
+            </header>
+
+            <section className="flex-1 overflow-y-auto px-4 py-5">
+                {isFace ? (
+                    <div className="space-y-3">
+                        {(messages.length ? messages : [{ id: 'preview', side: 'host', text: fallbackText }]).filter(message => message.text).map(message => {
+                            const mine = message.side === 'host';
+                            return (
+                                <article key={message.id || `${message.side}-${message.text}`} className={`flex ${mine ? 'justify-end' : 'justify-start'}`}>
+                                    <div className={`max-w-[82%] rounded-2xl px-3.5 py-2.5 shadow-sm ${mine ? 'rounded-br-md bg-emerald-100 text-[#17372C]' : 'rounded-bl-md bg-violet-50 text-[#2D1F47]'}`}>
+                                        <p className={`mb-1 text-[9px] font-black uppercase ${mine ? 'text-emerald-700' : 'text-violet-700'}`}>{mine ? 'Ben' : 'Karşı taraf'}</p>
+                                        <p className="whitespace-pre-wrap break-words text-sm font-bold leading-6">{message.text}</p>
+                                    </div>
+                                </article>
+                            );
+                        })}
+                        {!messages.length && !fallbackText && <p className="eary-muted py-12 text-center text-sm">Bu aktivitede henüz transkript yok.</p>}
+                    </div>
+                ) : (
+                    <article className="rounded-lg border eary-line bg-white/70 p-4">
+                        {fallbackText ? (
+                            <p className="whitespace-pre-wrap break-words text-[15px] font-semibold leading-8 text-[var(--text)]">{fallbackText}</p>
+                        ) : (
+                            <p className="eary-muted py-10 text-center text-sm">Bu aktivitede henüz transkript yok.</p>
+                        )}
+                    </article>
+                )}
+            </section>
+        </main>
+    );
+}
+
 export default function ChatHome(props) {
     const {
         account, error,
@@ -250,6 +305,7 @@ export default function ChatHome(props) {
     const [activeHomeMode, setActiveHomeMode] = useState(() => normalizeHomeMode(localStorage.getItem('eary_home_mode') || 'ambient'));
     const [activeToolView, setActiveToolView] = useState(null);
     const [activeToolPayload, setActiveToolPayload] = useState(null);
+    const [activityDetail, setActivityDetail] = useState(null);
     const [chatProfiles, setChatProfiles] = useState({});
     const pressTimerRef = useRef(null);
     const pressStartRef = useRef(null);
@@ -305,6 +361,7 @@ export default function ChatHome(props) {
 
     const launchHomeMode = mode => {
         const nextMode = selectHomeMode(mode);
+        setActivityDetail(null);
         if (nextMode === 'chats') {
             setActiveToolView(null);
             setActiveToolPayload(null);
@@ -317,6 +374,7 @@ export default function ChatHome(props) {
     };
 
     const returnToPremiumHome = useCallback(() => {
+        setActivityDetail(null);
         setActiveToolView(null);
         setActiveToolPayload(null);
         openHomeTab('accessibility');
@@ -330,12 +388,18 @@ export default function ChatHome(props) {
         if (activity.type === 'face') {
             setActiveHomeMode('face');
             localStorage.setItem('eary_home_mode', 'face');
-            setActiveToolView('face');
-            setActiveToolPayload({ faceSessionId: activity.sessionId || null });
+            setActiveToolView(null);
+            setActiveToolPayload(null);
+            setActivityDetail(activity);
             openHomeTab('accessibility');
             return;
         }
-        launchHomeMode(activity.type || activeHomeMode);
+        setActiveHomeMode(activity.type || activeHomeMode);
+        localStorage.setItem('eary_home_mode', activity.type || activeHomeMode);
+        setActiveToolView(null);
+        setActiveToolPayload(null);
+        setActivityDetail(activity);
+        openHomeTab('accessibility');
     };
 
     const persistFavorites = next => {
@@ -795,6 +859,9 @@ export default function ChatHome(props) {
         );
     };
     if (showNewRoomForm) return <NewConversation account={account} onBack={() => setShowNewRoomForm(false)} onOpenContacts={() => { setShowNewRoomForm(false); openContactPicker(); }} onSendRequest={sendMessageRequest} onCreateGroup={createGroup} />;
+    if (homeTab === 'accessibility' && activityDetail) {
+        return <ActivityDetailView activity={activityDetail} onBack={returnToPremiumHome} />;
+    }
     if (homeTab === 'accessibility' && activeToolView) {
         return <AccessibilityHub account={account} initialView={activeToolView} initialFaceSessionId={activeToolPayload?.faceSessionId || null} onBackHome={returnToPremiumHome} onOpenChats={() => openHomeTab('chats')} onOpenSettings={onOpenSettings} language={language} />;
     }

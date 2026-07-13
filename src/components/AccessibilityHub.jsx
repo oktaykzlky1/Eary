@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import {
     ArrowLeft, Captions,
-    Check, ChevronRight, ContactRound, Copy, FileText, Link,
+    Check, ChevronRight, ContactRound, FileText,
     History, Languages, MessageCircle, Mic, PanelsTopLeft, Phone, Save, ShieldAlert,
     Share2, Sparkles, StopCircle, UserRound, Volume2, X
 } from 'lucide-react';
@@ -491,7 +491,19 @@ const rememberActivity = (type, payload = {}) => {
             createdAt: payload.createdAt || Date.now(),
             meta: payload.meta || '',
             sessionId: payload.sessionId || null,
-            roomId: payload.roomId || null
+            roomId: payload.roomId || null,
+            transcriptText: String(payload.transcriptText || '').trim(),
+            processedText: String(payload.processedText || '').trim(),
+            messages: Array.isArray(payload.messages)
+                ? payload.messages.slice(-80).map(message => ({
+                    id: message.id,
+                    side: message.side,
+                    text: String(message.text || '').trim(),
+                    translation: String(message.translation || '').trim(),
+                    sourceLang: message.sourceLang || '',
+                    createdAt: message.createdAt || Date.now()
+                })).filter(message => message.text)
+                : []
         };
         const next = [item, ...current.filter(activity => activity.id !== item.id)].slice(0, 60);
         localStorage.setItem(RECENT_ACTIVITIES_KEY, JSON.stringify(next));
@@ -657,7 +669,9 @@ function AmbientListeningTool({ onBack, appLanguage, account }) {
                 title: 'Ortam dinleme',
                 preview: displayText,
                 createdAt: now,
-                meta: contextConfig.title
+                meta: contextConfig.title,
+                transcriptText: displayText,
+                processedText: ambientProcessedTextRef.current
             });
         }
     };
@@ -935,6 +949,7 @@ function FaceToFaceTool({ onBack, appLanguage, account }) {
     const [showOriginal, setShowOriginal] = useState({});
     const [showScrollDown, setShowScrollDown] = useState({ host: false, guest: false });
     const recognizerRef = useRef(null);
+    const messagesRef = useRef([]);
     const activeSideRef = useRef('host');
     const partialRef = useRef('');
     const faceCommittedRef = useRef('');
@@ -965,6 +980,9 @@ function FaceToFaceTool({ onBack, appLanguage, account }) {
             if (node) node.scrollTop = node.scrollHeight;
         });
     }, [messages, interim, activeSide, listening]);
+    useEffect(() => {
+        messagesRef.current = messages;
+    }, [messages]);
     useEffect(() => {
         if (targetLang !== hostLang) return;
         setTargetLang(SUPPORTED_LANGUAGES.find(item => item.code !== hostLang)?.code || 'en-US');
@@ -1032,18 +1050,31 @@ function FaceToFaceTool({ onBack, appLanguage, account }) {
         const translationTarget = getTranslationTarget(side);
         const id = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
         const item = { id, side, text: clean, translation: '', sourceLang, createdAt: Date.now() };
-        setMessages(current => [...current, item]);
+        const nextMessages = [...messagesRef.current, item];
+        messagesRef.current = nextMessages;
+        setMessages(nextMessages);
         rememberActivity('face', {
             id: 'face-current',
             title: 'Yüz yüze görüşme',
             preview: clean,
             createdAt: item.createdAt,
-            meta: side === 'host' ? 'Ben' : 'Karşı taraf'
+            meta: side === 'host' ? 'Ben' : 'Karşı taraf',
+            messages: nextMessages
         });
         if (translateEnabled && sourceLang !== translationTarget) {
             const translation = await translateText(clean, translationTarget, sourceLang);
             if (translation && translation.toLocaleLowerCase('tr-TR') !== clean.toLocaleLowerCase('tr-TR')) {
-                setMessages(current => current.map(message => message.id === id ? { ...message, translation } : message));
+                const translatedMessages = messagesRef.current.map(message => message.id === id ? { ...message, translation } : message);
+                messagesRef.current = translatedMessages;
+                setMessages(translatedMessages);
+                rememberActivity('face', {
+                    id: 'face-current',
+                    title: 'Yüz yüze görüşme',
+                    preview: clean,
+                    createdAt: item.createdAt,
+                    meta: side === 'host' ? 'Ben' : 'Karşı taraf',
+                    messages: translatedMessages
+                });
             }
         }
     };
@@ -1246,7 +1277,15 @@ function FaceToFaceTool({ onBack, appLanguage, account }) {
             <header className="eary-ios-safe-header flex items-center justify-between border-b eary-line px-3 pb-1.5">
                 <button type="button" onClick={onBack} className="eary-soft eary-muted flex h-8 w-8 items-center justify-center rounded-lg"><ArrowLeft size={18} /></button>
                 <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-[#7B52AB] text-white"><PanelsTopLeft size={17} /></span>
-                <button type="button" onClick={() => setTranslateEnabled(value => !value)} className={`flex h-8 w-8 items-center justify-center rounded-lg ${translateEnabled ? 'bg-[#7B52AB] text-white' : 'eary-soft eary-brand'}`} title="Çeviri"><Languages size={17} /></button>
+                <div className="flex items-center gap-1.5">
+                    {inviteUrl && (
+                        <button type="button" onClick={shareInvite} className="eary-soft eary-brand flex h-8 items-center gap-1.5 rounded-lg px-2.5 text-[10px] font-black" title="Davet et">
+                            <Share2 size={14} />
+                            <span>{inviteCopied ? 'Kopyalandı' : 'Davet et'}</span>
+                        </button>
+                    )}
+                    <button type="button" onClick={() => setTranslateEnabled(value => !value)} className={`flex h-8 w-8 items-center justify-center rounded-lg ${translateEnabled ? 'bg-[#7B52AB] text-white' : 'eary-soft eary-brand'}`} title="Çeviri"><Languages size={17} /></button>
+                </div>
             </header>
             <div className="flex items-center gap-2 border-b eary-line px-3 py-1.5">
                 <span className="text-[9px] font-black uppercase text-[#8A7E9F]">Benim konuşma dilim</span>
@@ -1265,21 +1304,6 @@ function FaceToFaceTool({ onBack, appLanguage, account }) {
                         <option value="it-IT">Italiano</option>
                     </select>
                 </div>
-            )}
-            {inviteUrl && (
-                <section className="border-b eary-line bg-white/70 px-3 py-2">
-                    <div className="mb-2 flex items-center gap-2">
-                        <span className="eary-brand-soft flex h-8 w-8 shrink-0 items-center justify-center rounded-lg"><Link size={16} /></span>
-                        <div className="min-w-0 flex-1">
-                            <p className="text-[11px] font-black">Eary davet bağlantınız</p>
-                            <p className="eary-muted truncate text-[9px]">{inviteUrl}</p>
-                        </div>
-                    </div>
-                    <div className="grid grid-cols-2 gap-2">
-                        <button type="button" onClick={copyInvite} className="eary-soft eary-brand flex items-center justify-center gap-1.5 rounded-lg py-2 text-[10px] font-bold"><Copy size={14} /> {inviteCopied ? 'Kopyalandı' : 'Kopyala'}</button>
-                        <button type="button" onClick={shareInvite} className="eary-brand-bg flex items-center justify-center gap-1.5 rounded-lg py-2 text-[10px] font-bold"><Share2 size={14} /> Paylaş</button>
-                    </div>
-                </section>
             )}
             <div className="flex min-h-0 flex-1 flex-col">
                 {renderPanel('guest', true, guestScrollRef)}
