@@ -6,6 +6,7 @@ const root = process.cwd();
 const files = {
   speech: 'src/utils/speech.js',
   hub: 'src/components/AccessibilityHub.jsx',
+  chatHome: 'src/components/ChatHome.jsx',
   intercom: 'src/components/IntercomInterface.jsx',
   sidebar: 'src/components/Sidebar.jsx',
   app: 'src/App.jsx',
@@ -80,6 +81,25 @@ const checks = [
       contents.hub.includes('syncAmbientBackgroundWork') &&
       contents.hub.includes('setInterval(() => syncAmbientBackgroundWork(false), 10000'),
     message: 'Ambient live captions must stay raw, use stable text plus mutable live tail, render as lightweight paragraphs, move storage/cleanup to the 10 second background loop, and pause translation while listening.',
+  },
+  {
+    file: files.chatHome,
+    ok: contents.chatHome.includes('updateStoredAmbientTranscript') &&
+      contents.chatHome.includes('CAPTION_SESSIONS_KEY') &&
+      contents.chatHome.includes('textarea') &&
+      contents.chatHome.includes('navigator.share') &&
+      contents.chatHome.includes('Share2 size={17}') &&
+      contents.chatHome.includes('Save size={17}'),
+    message: 'Ambient activity detail must keep editable transcript text with save and share actions.',
+  },
+  {
+    file: files.chatHome,
+    ok: contents.chatHome.includes('} else if (activityDetail) {') &&
+      contents.chatHome.includes('returnToPremiumHome();') &&
+      contents.chatHome.includes('grid grid-cols-3 border-t') &&
+      !contents.chatHome.includes('selectedMode.eyebrow') &&
+      !contents.chatHome.includes('text.navListen'),
+    message: 'Home activity detail must consume Android back, home bottom navigation must stay three-item, and visible live-label pills must stay removed.',
   },
   {
     file: files.hub,

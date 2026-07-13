@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
     ArrowLeft, BellOff, Captions, ChevronRight, Languages, LockKeyhole, MessageCircle, MessageSquarePlus,
-    Menu, Mic, Search, Send, Settings, Sparkles, Star, Trash2, UserPlus, UserRound, X
+    Menu, Mic, Save, Search, Send, Settings, Share2, Sparkles, Star, Trash2, UserPlus, UserRound, X
 } from 'lucide-react';
 import { Capacitor, registerPlugin } from '@capacitor/core';
 import { db, ref, get, getRest, onValue, push, update, updateRest } from '../firebase';
@@ -26,6 +26,13 @@ const readJson = (key, fallback) => {
         return fallback;
     }
 };
+
+const writeJson = (key, value) => {
+    localStorage.setItem(key, JSON.stringify(value));
+};
+
+const RECENT_ACTIVITIES_KEY = 'eary_recent_activities';
+const CAPTION_SESSIONS_KEY = 'eary_caption_sessions';
 
 const compactPreview = value => {
     const words = String(value || '').replace(/\s+/g, ' ').trim().split(/\s+/).filter(Boolean);
@@ -106,8 +113,7 @@ function PremiumHome({ activeMode, setActiveMode, onLaunchMode, onOpenChats, onO
     const homeModes = getHomeModes(language);
     const text = uiText(language);
     const selectedMode = homeModes.find(mode => mode.id === activeMode) || homeModes[1];
-    const ModeIcon = selectedMode.icon;
-    const activities = readJson('eary_recent_activities', []);
+    const activities = readJson(RECENT_ACTIVITIES_KEY, []);
     const activityRows = activities.filter(activity => activity.type === activeMode).slice(0, 4);
     const chatRows = recentItems.slice(0, 4).map(item => {
         const display = chatDisplay(item);
@@ -157,18 +163,14 @@ function PremiumHome({ activeMode, setActiveMode, onLaunchMode, onOpenChats, onO
                 </div>
             </header>
 
-            <section className="flex-1 overflow-y-auto px-5 pb-24 pt-2">
-                <div className="flex min-h-[52vh] flex-col items-center justify-center text-center">
-                    <div className="mb-5 flex items-center gap-2 rounded-full bg-[var(--soft)] px-3 py-1.5">
-                        <ModeIcon size={15} className="eary-brand" />
-                        <span className="eary-muted text-[10px] font-black uppercase">{selectedMode.eyebrow}</span>
-                    </div>
-                    <button type="button" onClick={() => onLaunchMode(selectedMode.id)} className="eary-brand-bg flex h-28 w-28 items-center justify-center rounded-full shadow-[0_18px_42px_rgba(23,107,91,0.22)] active:scale-[0.98]" aria-label={selectedMode.action}>
-                        {selectedMode.id === 'chats' ? <MessageCircle size={42} /> : <Mic size={44} />}
+            <section className="flex-1 overflow-y-auto px-5 pb-20 pt-1">
+                <div className="flex min-h-[44vh] flex-col items-center justify-center text-center">
+                    <button type="button" onClick={() => onLaunchMode(selectedMode.id)} className="eary-brand-bg flex h-24 w-24 items-center justify-center rounded-full shadow-[0_16px_34px_rgba(23,107,91,0.20)] active:scale-[0.98]" aria-label={selectedMode.action}>
+                        {selectedMode.id === 'chats' ? <MessageCircle size={38} /> : <Mic size={40} />}
                     </button>
-                    <h2 className="mt-7 max-w-[320px] text-2xl font-black leading-tight tracking-normal">{selectedMode.title}</h2>
-                    <p className="eary-muted mt-3 max-w-[330px] text-sm font-medium leading-6">{selectedMode.description}</p>
-                    <button type="button" onClick={() => onLaunchMode(selectedMode.id)} className="mt-6 rounded-full bg-[#17221f] px-6 py-3 text-sm font-black text-white shadow-sm">
+                    <h2 className="mt-5 max-w-[320px] text-2xl font-black leading-tight tracking-normal">{selectedMode.title}</h2>
+                    <p className="eary-muted mt-2 max-w-[330px] text-sm font-medium leading-6">{selectedMode.description}</p>
+                    <button type="button" onClick={() => onLaunchMode(selectedMode.id)} className="mt-5 rounded-full bg-[#17221f] px-6 py-3 text-sm font-black text-white shadow-sm">
                         {selectedMode.action}
                     </button>
                 </div>
@@ -208,10 +210,9 @@ function PremiumHome({ activeMode, setActiveMode, onLaunchMode, onOpenChats, onO
                 </section>
             </section>
 
-            <nav className="eary-shell absolute bottom-0 left-0 right-0 grid grid-cols-4 border-t eary-line px-3 pb-[max(10px,env(safe-area-inset-bottom))] pt-2 shadow-[0_-6px_18px_rgba(0,0,0,0.04)]">
+            <nav className="eary-shell absolute bottom-0 left-0 right-0 grid grid-cols-3 border-t eary-line px-3 pb-[max(10px,env(safe-area-inset-bottom))] pt-2 shadow-[0_-6px_18px_rgba(0,0,0,0.04)]">
                 <button type="button" className="eary-brand flex flex-col items-center gap-1 text-[10px] font-bold"><Sparkles size={20} />{text.navHome}</button>
                 <button type="button" onClick={onOpenChats} className="eary-muted flex flex-col items-center gap-1 text-[10px] font-semibold"><MessageCircle size={20} />{text.navChats}</button>
-                <button type="button" onClick={() => onLaunchMode('ambient')} className="eary-muted flex flex-col items-center gap-1 text-[10px] font-semibold"><Captions size={20} />{text.navListen}</button>
                 <button type="button" onClick={onOpenSettings} className="eary-muted flex flex-col items-center gap-1 text-[10px] font-semibold"><Settings size={20} />{text.navSettings}</button>
             </nav>
         </main>
@@ -225,12 +226,82 @@ const activityText = activity => String(
     || ''
 ).trim();
 
+const updateStoredAmbientTranscript = (activity, nextText) => {
+    const cleanText = String(nextText || '').trim();
+    const updatedAt = Date.now();
+    const updatedActivity = {
+        ...activity,
+        preview: cleanText,
+        transcriptText: cleanText,
+        processedText: cleanText,
+        updatedAt
+    };
+    const activities = readJson(RECENT_ACTIVITIES_KEY, []);
+    const hasActivity = activities.some(item => item.id === activity?.id);
+    const nextActivities = (hasActivity
+        ? activities.map(item => item.id === activity.id ? { ...item, ...updatedActivity } : item)
+        : [updatedActivity, ...activities]
+    ).slice(0, 30);
+    writeJson(RECENT_ACTIVITIES_KEY, nextActivities);
+
+    const sessions = readJson(CAPTION_SESSIONS_KEY, []);
+    let sessionChanged = false;
+    const nextSessions = sessions.map(session => {
+        const sameSession = activity?.sessionId && String(session.id) === String(activity.sessionId);
+        const sameActivity = activity?.id && String(session.id) === String(activity.id);
+        if (!sameSession && !sameActivity) return session;
+        sessionChanged = true;
+        return {
+            ...session,
+            transcriptText: cleanText,
+            processedText: cleanText,
+            updatedAt
+        };
+    });
+    if (sessionChanged) writeJson(CAPTION_SESSIONS_KEY, nextSessions);
+    return updatedActivity;
+};
+
 function ActivityDetailView({ activity, onBack }) {
-    const isFace = activity?.type === 'face';
-    const messages = Array.isArray(activity?.messages) ? activity.messages.filter(message => message?.text) : [];
-    const fallbackText = activityText(activity);
+    const [currentActivity, setCurrentActivity] = useState(activity);
+    const [ambientDraft, setAmbientDraft] = useState(() => activityText(activity));
+    const [statusText, setStatusText] = useState('');
+    const isFace = currentActivity?.type === 'face';
+    const messages = Array.isArray(currentActivity?.messages) ? currentActivity.messages.filter(message => message?.text) : [];
+    const fallbackText = activityText(currentActivity);
     const title = activity?.title || (isFace ? 'Yüz yüze görüşme' : 'Ortam dinleme');
-    const createdAt = Number(activity?.createdAt || 0);
+    const createdAt = Number(currentActivity?.createdAt || 0);
+
+    useEffect(() => {
+        setCurrentActivity(activity);
+        setAmbientDraft(activityText(activity));
+        setStatusText('');
+    }, [activity]);
+
+    const saveAmbientDraft = () => {
+        const updatedActivity = updateStoredAmbientTranscript(currentActivity, ambientDraft);
+        setCurrentActivity(updatedActivity);
+        setAmbientDraft(activityText(updatedActivity));
+        setStatusText('Kaydedildi');
+        setTimeout(() => setStatusText(''), 1800);
+    };
+
+    const shareAmbientDraft = async () => {
+        const textToShare = String(ambientDraft || '').trim();
+        if (!textToShare) return;
+        try {
+            if (navigator.share) {
+                await navigator.share({ title, text: textToShare });
+                setStatusText('Paylasima hazir');
+            } else if (navigator.clipboard?.writeText) {
+                await navigator.clipboard.writeText(textToShare);
+                setStatusText('Metin panoya kopyalandi');
+            }
+        } catch (error) {
+            if (error?.name !== 'AbortError') setStatusText('Paylasim acilamadi');
+        }
+        setTimeout(() => setStatusText(''), 1800);
+    };
 
     return (
         <main className="eary-shell eary-line relative mx-auto flex h-screen w-full max-w-md flex-col overflow-hidden bg-[var(--surface)] sm:h-[780px] sm:rounded-xl sm:border sm:shadow-xl">
@@ -260,12 +331,24 @@ function ActivityDetailView({ activity, onBack }) {
                         {!messages.length && !fallbackText && <p className="eary-muted py-12 text-center text-sm">Bu aktivitede henüz transkript yok.</p>}
                     </div>
                 ) : (
-                    <article className="rounded-lg border eary-line bg-white/70 p-4">
-                        {fallbackText ? (
-                            <p className="whitespace-pre-wrap break-words text-[15px] font-semibold leading-8 text-[var(--text)]">{fallbackText}</p>
-                        ) : (
-                            <p className="eary-muted py-10 text-center text-sm">Bu aktivitede henüz transkript yok.</p>
-                        )}
+                    <article className="space-y-3">
+                        <textarea
+                            value={ambientDraft}
+                            onChange={event => setAmbientDraft(event.target.value)}
+                            rows={16}
+                            className="eary-input min-h-[360px] w-full resize-none rounded-lg border eary-line bg-white/80 p-4 text-[15px] font-semibold leading-8 text-[var(--text)]"
+                            placeholder="Bu aktivitede henuz transkript yok."
+                            aria-label="Ortam transkriptini duzenle"
+                        />
+                        <div className="flex gap-2">
+                            <button type="button" onClick={saveAmbientDraft} disabled={!ambientDraft.trim()} className="eary-brand-bg flex flex-1 items-center justify-center gap-2 rounded-lg px-4 py-3 text-sm font-black disabled:opacity-40">
+                                <Save size={17} /> Kaydet
+                            </button>
+                            <button type="button" onClick={shareAmbientDraft} disabled={!ambientDraft.trim()} className="eary-soft eary-brand flex flex-1 items-center justify-center gap-2 rounded-lg px-4 py-3 text-sm font-black disabled:opacity-40">
+                                <Share2 size={17} /> Paylas
+                            </button>
+                        </div>
+                        {statusText && <p className="eary-muted text-center text-xs font-bold">{statusText}</p>}
                     </article>
                 )}
             </section>
@@ -487,6 +570,9 @@ export default function ChatHome(props) {
             } else if (showNewRoomForm) {
                 event.preventDefault();
                 setShowNewRoomForm(false);
+            } else if (activityDetail) {
+                event.preventDefault();
+                returnToPremiumHome();
             } else if (activeToolView) {
                 event.preventDefault();
                 returnToPremiumHome();
@@ -497,7 +583,7 @@ export default function ChatHome(props) {
         };
         window.addEventListener('eary:back', handleBack);
         return () => window.removeEventListener('eary:back', handleBack);
-    }, [activeToolView, homeTab, lockedTarget, openHomeTab, returnToPremiumHome, selectedChatIds.length, setShowNewRoomForm, showContacts, showNewRoomForm]);
+    }, [activeToolView, activityDetail, homeTab, lockedTarget, openHomeTab, returnToPremiumHome, selectedChatIds.length, setShowNewRoomForm, showContacts, showNewRoomForm]);
 
     useEffect(() => {
         if (!account) { setMessageRequests([]); return undefined; }
@@ -942,10 +1028,9 @@ export default function ChatHome(props) {
                 )}
             </section>
 
-            <nav className="eary-shell absolute bottom-0 left-0 right-0 grid grid-cols-4 border-t eary-line px-3 pb-[max(10px,env(safe-area-inset-bottom))] pt-2 shadow-[0_-6px_18px_rgba(0,0,0,0.04)]">
+            <nav className="eary-shell absolute bottom-0 left-0 right-0 grid grid-cols-3 border-t eary-line px-3 pb-[max(10px,env(safe-area-inset-bottom))] pt-2 shadow-[0_-6px_18px_rgba(0,0,0,0.04)]">
                 <button type="button" onClick={returnToPremiumHome} className="eary-muted flex flex-col items-center gap-1 text-[10px] font-semibold"><Sparkles size={20} />{text.navHome}</button>
                 <button type="button" className="eary-brand flex flex-col items-center gap-1 text-[10px] font-bold"><MessageCircle size={20} />{text.navChats}</button>
-                <button type="button" onClick={() => setShowNewRoomForm(true)} className="eary-muted flex flex-col items-center gap-1 text-[10px] font-semibold"><MessageSquarePlus size={20} />{text.navNew}</button>
                 <button type="button" onClick={onOpenSettings} className="eary-muted flex flex-col items-center gap-1 text-[10px] font-semibold"><Settings size={20} />{text.navSettings}</button>
             </nav>
             {lockedTarget && <div className="absolute inset-0 z-50 flex items-end bg-black/35" onClick={() => setLockedTarget(null)}><form onSubmit={unlockChat} onClick={event => event.stopPropagation()} className="eary-shell w-full rounded-t-xl p-5 shadow-2xl"><div className="mb-4 flex items-center gap-3"><span className="eary-brand-soft flex h-10 w-10 items-center justify-center rounded-lg"><LockKeyhole size={19} /></span><div><h2 className="font-bold">Sohbet kilitli</h2><p className="eary-muted text-xs">{lockedTarget.roomId} için 4 haneli PIN’i girin.</p></div></div><input value={unlockPin} onChange={event => setUnlockPin(event.target.value.replace(/\D/g, '').slice(0, 4))} inputMode="numeric" type="password" autoFocus className="eary-input w-full rounded-lg border px-3 py-3 text-center text-lg tracking-[0.5em]" placeholder="••••" />{unlockError && <p className="mt-2 text-xs font-semibold text-rose-600">{unlockError}</p>}<button type="submit" disabled={unlockPin.length !== 4} className="eary-brand-bg mt-4 w-full rounded-lg py-3 text-sm font-bold disabled:opacity-40">Sohbeti aç</button></form></div>}
