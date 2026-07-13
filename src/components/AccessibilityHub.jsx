@@ -9,6 +9,7 @@ import { getDuoSpeechRecognizer } from '../utils/speech';
 import { correctTranscription, extractPersonalTerms } from '../utils/autocorrect';
 import { SUPPORTED_LANGUAGES, getInitialAppLanguage, getLanguageLabel, normalizeAppLanguage } from '../utils/language';
 import { uiText } from '../utils/i18n';
+import { buildInviteText, buildInviteUrl, copyInviteLink, shareInviteLink } from '../utils/shareInvite';
 import { Capacitor, registerPlugin } from '@capacitor/core';
 
 const VoiceSettings = registerPlugin('VoiceSettings');
@@ -966,8 +967,8 @@ function FaceToFaceTool({ onBack, appLanguage, account }) {
     const hostScrollRef = useRef(null);
     const speechTerms = buildSpeechPersonalTerms(account);
     const [inviteCopied, setInviteCopied] = useState(false);
-    const inviteUrl = account?.username ? `${window.location.origin}${window.location.pathname}?invite=${account.username}` : '';
-    const inviteText = account?.nickname ? `${account.nickname} sizi Eary'de konuşmaya davet ediyor.` : 'Sizi Eary’de konuşmaya davet ediyorum.';
+    const inviteUrl = buildInviteUrl(account?.username);
+    const inviteText = buildInviteText(account);
 
     useEffect(() => () => {
         desiredFaceListeningRef.current = false;
@@ -1029,18 +1030,15 @@ function FaceToFaceTool({ onBack, appLanguage, account }) {
 
     const copyInvite = async () => {
         if (!inviteUrl) return;
-        await navigator.clipboard.writeText(inviteUrl);
+        await copyInviteLink(inviteUrl);
         setInviteCopied(true);
         setTimeout(() => setInviteCopied(false), 1800);
     };
 
     const shareInvite = async () => {
         if (!inviteUrl) return;
-        if (navigator.share) {
-            await navigator.share({ title: 'Eary daveti', text: inviteText, url: inviteUrl }).catch(() => {});
-            return;
-        }
-        await copyInvite();
+        const result = await shareInviteLink({ inviteUrl, inviteText });
+        if (result.status === 'copied') await copyInvite();
     };
 
     const addMessage = async (side, text) => {

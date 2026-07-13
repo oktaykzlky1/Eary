@@ -1,13 +1,14 @@
 import { useEffect, useState } from 'react';
 import { Capacitor, registerPlugin } from '@capacitor/core';
 import {
-    X, ArrowLeft, UserRound, CircleHelp, Bell, Languages, Database, Shield, Smartphone, KeyRound, Lock,
-    Type, Moon, Sun, LogOut, ChevronRight, Mic2, ShieldCheck, Trash2, Archive,
-    MessageCircle, Check, Eye, EyeOff, LockKeyhole, AtSign,
-    Phone, UsersRound, Clock3, CheckCheck, MessageCircleQuestion, Copy, Accessibility, HardDrive
+    X, ArrowLeft, UserRound, CircleHelp, Bell, Languages, Database, Shield, Smartphone, Lock,
+    Type, Moon, Sun, LogOut, ChevronRight, Mic2, ShieldCheck, Trash2,
+    MessageCircle, Check, Eye, EyeOff, LockKeyhole, AtSign, Share2,
+    Phone, UsersRound, Clock3, CheckCheck, MessageCircleQuestion, Copy, Accessibility
 } from 'lucide-react';
 import { SUPPORTED_LANGUAGES, getLanguageLabel } from '../utils/language';
 import { uiText } from '../utils/i18n';
+import { buildInviteText, buildInviteUrl, copyInviteLink, shareInviteLink } from '../utils/shareInvite';
 
 const VoiceSettings = registerPlugin('VoiceSettings');
 
@@ -123,9 +124,21 @@ export default function Sidebar({
 
     const copyInvite = async () => {
         if (!account) return;
-        await navigator.clipboard.writeText(`${window.location.origin}${window.location.pathname}?invite=${account.username}`);
+        await copyInviteLink(buildInviteUrl(account.username));
         setInviteCopied(true);
         setTimeout(() => setInviteCopied(false), 1800);
+    };
+
+    const shareInvite = async () => {
+        if (!account) return;
+        const result = await shareInviteLink({
+            inviteUrl: buildInviteUrl(account.username),
+            inviteText: buildInviteText(account)
+        });
+        if (result.status === 'copied') {
+            setInviteCopied(true);
+            setTimeout(() => setInviteCopied(false), 1800);
+        }
     };
 
     const resetInviteProfile = () => {
@@ -233,7 +246,11 @@ export default function Sidebar({
                                     <label className="block text-xs font-semibold">Hakkımda <span className="eary-muted font-semibold">(isteğe bağlı)</span><textarea value={bio} onChange={e => setBio(e.target.value)} rows="3" className="eary-input mt-1.5 w-full resize-none rounded-lg border px-3 py-2.5 text-sm" placeholder="İsterseniz kısa bir durum yazısı ekleyin" /></label>
                                     <p className="eary-muted -mt-2 text-[10px] leading-4">Bu alanları doldurmak zorunlu değildir. Davet bağlantınız profil bilgisi olmadan da çalışır.</p>
                                     <button type="button" onClick={saveProfile} className="eary-brand-bg flex w-full items-center justify-center gap-2 rounded-lg py-3 text-sm font-bold">{saved ? <><Check size={17} /> Kaydedildi</> : 'Profili kaydet'}</button>
-                                    <button type="button" onClick={copyInvite} className="eary-soft eary-brand flex w-full items-center justify-center gap-2 rounded-lg py-3 text-sm font-bold"><Copy size={17} />{inviteCopied ? 'Davet bağlantısı kopyalandı' : 'Davet bağlantısını kopyala'}</button>                                </div>
+                                    <div className="grid grid-cols-2 gap-2">
+                                        <button type="button" onClick={copyInvite} className="eary-soft eary-brand flex items-center justify-center gap-2 rounded-lg py-3 text-sm font-bold"><Copy size={17} />{inviteCopied ? 'Kopyalandı' : 'Kopyala'}</button>
+                                        <button type="button" onClick={shareInvite} className="eary-brand-bg flex items-center justify-center gap-2 rounded-lg py-3 text-sm font-bold"><Share2 size={17} /> Paylaş</button>
+                                    </div>
+                                </div>
                             ) : (
                                 <div className="eary-soft rounded-lg p-3 text-center text-xs font-semibold">Profil hazırlanıyor</div>
                             )}
@@ -296,8 +313,6 @@ export default function Sidebar({
                         <div className="py-2">
                             <SectionTitle description="Mesaj, grup ve erişim uyarılarının cihazda nasıl görüneceği.">Bildirimler</SectionTitle>
                             <SettingRow icon={Bell} title="Anlık mesaj bildirimleri" description="Yeni mesajları kilit ekranında göster" onClick={onToggleAlwaysNotify} action={<Toggle checked={alwaysNotify} onChange={onToggleAlwaysNotify} label="Bildirimler" />} />
-                            <SettingRow icon={MessageCircle} title="Sohbet bildirimleri" description="Bireysel ve grup mesajları için varsayılan bildirim" disabled />
-                            <SettingRow icon={Eye} title="Önizleme göster" description="Kilit ekranında mesaj metnini göster/gizle" disabled />
                             {Capacitor.getPlatform() === 'android' && <SettingRow icon={ShieldCheck} title="Android bildirim izinleri" description="Sistem izinlerini ve kilit ekranını yönet" onClick={openNotificationSettings} />}
                         </div>
                     )}
@@ -305,29 +320,34 @@ export default function Sidebar({
                     {tab === 'chats' && (
                         <div className="py-2">
                             <SectionTitle description="Sohbet ekranı ve konuşma geçmişi ayarları.">Sohbetler</SectionTitle>
-                            <SettingRow icon={MessageCircle} title="Chat ekranı" description="Mesaj balonları, cevaplama ve tepki özellikleri aktif" disabled />
-                            <SettingRow icon={Archive} title="Arşivlenen sohbetler" description="Arşiv ekranı sonraki sürümde eklenecek" disabled />
-                            <SettingRow icon={CheckCheck} title="Okundu bilgisi" description="Ayar Gizlilik bölümünden yönetilir" onClick={() => setTab('privacy')} />
+                            <div className="border-b eary-line px-4 py-3.5">
+                                <div className="mb-3 flex items-center gap-3"><span className="eary-brand-soft flex h-9 w-9 items-center justify-center rounded-lg"><Type size={18} /></span><div className="flex-1"><p className="text-sm font-semibold">Sohbet yazı boyutu</p><p className="eary-muted text-[11px]">{chatFontSize}px</p></div></div>
+                                <input type="range" min="14" max="28" value={chatFontSize} onChange={event => setChatFontSize?.(Number(event.target.value))} className="w-full accent-[var(--brand)]" />
+                            </div>
+                            <SettingRow icon={CheckCheck} title="Okundu bilgisi" description="Mesajların okundu bilgisini gizlilik bölümünde yönet" onClick={() => { setTab('privacy'); setDetailOpen(true); }} />
                         </div>
                     )}
 
                     {tab === 'data' && (
                         <div className="py-2">
                             <SectionTitle description="Önbellek ve yedekleme alanı.">Depolama ve veri</SectionTitle>
-                            <SettingRow icon={HardDrive} title="Depolama kullanımı" description="Önbellek boyutu hesaplama eklenecek" disabled />
-                            <SettingRow icon={Trash2} title="Önbelleği temizle" description="Geçici yerel verileri temizler" onClick={() => { localStorage.removeItem('eary_caption_sessions'); localStorage.removeItem('eary_environment_events'); }} />
+                            <SettingRow icon={Trash2} title="Aktivite önbelleğini temizle" description="Son ortam/yüz yüze aktivitelerinin yerel kopyasını temizler" onClick={() => { localStorage.removeItem('eary_caption_sessions'); localStorage.removeItem('eary_environment_events'); localStorage.removeItem('eary_recent_activities'); window.dispatchEvent(new CustomEvent('eary:toast', { detail: 'Yerel aktivite önbelleği temizlendi' })); }} />
                             <SettingRow icon={Database} title="Sohbet yedeği" description="Bu cihazda yerel yedekleme tercihi" action={<Toggle checked={backupChats} onChange={() => setBackupChats(value => !value)} label="Sohbet yedeği" />} />
-                            <SettingRow icon={HardDrive} title="Veri kullanımı" description="Ağ kullanımı raporu sonraki sürümde eklenecek" disabled />
                         </div>
                     )}
 
                     {tab === 'devices' && (
                         <div className="py-2">
                             <SectionTitle description="Aktif cihazlar, uygulama kilidi ve güvenlik kontrolleri.">Cihazlar ve güvenlik</SectionTitle>
-                            <SettingRow icon={Smartphone} title="Bu cihaz" description={`${Capacitor.getPlatform()} cihazında aktif oturum`} disabled />
+                            <div className="flex items-center gap-3 border-b eary-line px-4 py-3.5">
+                                <span className="eary-brand-soft flex h-9 w-9 shrink-0 items-center justify-center rounded-lg"><Smartphone size={18} /></span>
+                                <span className="min-w-0 flex-1">
+                                    <span className="block text-sm font-semibold">Bu cihaz</span>
+                                    <span className="eary-muted mt-0.5 block text-[11px] leading-4">{Capacitor.getPlatform()} cihazında aktif davet profili</span>
+                                </span>
+                            </div>
                             <SettingRow icon={Lock} title="Uygulama kilidi" description="Eary açılırken cihaz kilidi isteme tercihi" action={<Toggle checked={appLock} onChange={() => setAppLock(value => !value)} label="Uygulama kilidi" />} />
-                            <SettingRow icon={KeyRound} title="Aktif oturumlar" description="Bağlı cihaz yönetimi sonraki sürümde eklenecek" disabled />
-                            <SettingRow icon={Shield} title="Güvenlik kontrolü" description="Dil, mikrofon, bildirim ve gizlilik ayarlarını gözden geçir" onClick={() => setTab('privacy')} />
+                            <SettingRow icon={Shield} title="Güvenlik kontrolü" description="Gizlilik ve bulunabilirlik ayarlarını gözden geçir" onClick={() => { setTab('privacy'); setDetailOpen(true); }} />
                             <SettingRow icon={LogOut} title={text.logout} description={text.logoutDesc} danger onClick={resetInviteProfile} />
                         </div>
                     )}

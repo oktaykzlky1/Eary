@@ -105,6 +105,7 @@ const normalizeHomeMode = value => ['face', 'ambient', 'chats'].includes(value) 
 import { normalizePhone, phoneLookupKey } from '../utils/identity';
 import { normalizeAppLanguage } from '../utils/language';
 import { uiText } from '../utils/i18n';
+import { buildInviteText, buildInviteUrl, shareInviteLink } from '../utils/shareInvite';
 import AccessibilityHub from './AccessibilityHub';
 import NewConversation from './NewConversation';
 
@@ -833,24 +834,17 @@ export default function ChatHome(props) {
     };
 
     const inviteContact = async contact => {
-        const inviteUrl = `${window.location.origin}${window.location.pathname}?invite=${account.username}`;
-        const text = `${account.nickname} sizi Eary'de konuşmaya davet ediyor: ${inviteUrl}`;
-        if (navigator.share) {
-            await navigator.share({ title: 'Eary daveti', text, url: inviteUrl }).catch(() => {});
-        } else {
-            window.location.href = `sms:${contact.normalizedPhone}?body=${encodeURIComponent(text)}`;
-        }
+        const inviteUrl = buildInviteUrl(account?.username);
+        const inviteText = `${buildInviteText(account)}${contact?.name ? ` (${contact.name})` : ''}`;
+        const result = await shareInviteLink({ inviteUrl, inviteText });
+        if (result.status === 'copied') setToast('Paylaşım açılamadı; davet bağlantısı kopyalandı');
     };
 
     const shareGeneralInvite = async () => {
-        const inviteUrl = `${window.location.origin}${window.location.pathname}?invite=${account.username}`;
-        const text = `${account.nickname} sizi Eary'de konuşmaya davet ediyor.`;
-        if (navigator.share) await navigator.share({ title: 'Eary daveti', text, url: inviteUrl }).catch(() => {});
-        else {
-            await navigator.clipboard.writeText(inviteUrl);
-            setToast('Davet bağlantısı kopyalandı');
-            setShowContacts(false);
-        }
+        const inviteUrl = buildInviteUrl(account?.username);
+        const result = await shareInviteLink({ inviteUrl, inviteText: buildInviteText(account) });
+        if (result.status === 'shared') setToast('Paylaşım seçenekleri açıldı');
+        if (result.status === 'copied') setToast('Paylaşım açılamadı; davet bağlantısı kopyalandı');
     };
 
     const sendMessageRequest = async profile => {

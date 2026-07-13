@@ -5,6 +5,7 @@
 	"packageClassList": [
 		"AppPlugin",
 		"LocalNotificationsPlugin",
-		"PushNotificationsPlugin"
+		"PushNotificationsPlugin",
+		"SharePlugin"
 	]
 }

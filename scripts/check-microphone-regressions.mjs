@@ -11,6 +11,7 @@ const files = {
   intercom: 'src/components/IntercomInterface.jsx',
   sidebar: 'src/components/Sidebar.jsx',
   app: 'src/App.jsx',
+  shareInvite: 'src/utils/shareInvite.js',
   native: 'android/app/src/main/java/com/asleyduo/app/EarySpeechPlugin.java',
   contactsNative: 'android/app/src/main/java/com/asleyduo/app/EaryContactsPlugin.java',
   mainActivity: 'android/app/src/main/java/com/asleyduo/app/MainActivity.java',
@@ -128,8 +129,10 @@ const checks = [
   },
   {
     file: files.newConversation,
-    ok: contents.newConversation.includes('Paylaşımı aç') &&
-      contents.newConversation.includes('navigator.share(sharePayload)') &&
+    ok: contents.newConversation.includes('shareInviteLink({ inviteUrl, inviteText })') &&
+      contents.newConversation.includes('copyInviteLink(inviteUrl)') &&
+      contents.shareInvite.includes('@capacitor/share') &&
+      contents.shareInvite.includes('Share.share(payload)') &&
       contents.newConversation.includes('Kabul edilince sohbet otomatik olarak Sohbetler') &&
       contents.newConversation.includes('Gruba eklemek için kişi ara') &&
       contents.newConversation.includes('En az 2 kişi seçin'),

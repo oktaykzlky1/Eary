@@ -3,6 +3,7 @@ import {
     ArrowLeft, AtSign, BookUser, Check, Copy, Link, Search, Send, Share2, UserPlus, UsersRound, X
 } from 'lucide-react';
 import { getRest } from '../firebase';
+import { buildInviteText, buildInviteUrl, copyInviteLink, shareInviteLink } from '../utils/shareInvite';
 
 function ProfileAvatar({ profile, selected = false }) {
     return (
@@ -36,8 +37,8 @@ export default function NewConversation({ account, onBack, onOpenContacts, onSen
     const [requestFeedback, setRequestFeedback] = useState('');
     const [inviteCopied, setInviteCopied] = useState(false);
     const searchRunRef = useRef(0);
-    const inviteUrl = account?.username ? `${window.location.origin}${window.location.pathname}?invite=${account.username}` : '';
-    const inviteText = account?.nickname ? `${account.nickname} sizi Eary'de konuşmaya davet ediyor.` : 'Sizi Eary’de konuşmaya davet ediyorum.';
+    const inviteUrl = buildInviteUrl(account?.username);
+    const inviteText = buildInviteText(account);
 
     const handleBack = event => {
         event?.preventDefault?.();
@@ -111,7 +112,7 @@ export default function NewConversation({ account, onBack, onOpenContacts, onSen
 
     const copyInvite = async () => {
         if (!inviteUrl) return;
-        await navigator.clipboard.writeText(inviteUrl);
+        await copyInviteLink(inviteUrl);
         setInviteCopied(true);
         setRequestFeedback('Davet bağlantısı kopyalandı');
         setTimeout(() => setInviteCopied(false), 1800);
@@ -119,21 +120,9 @@ export default function NewConversation({ account, onBack, onOpenContacts, onSen
 
     const shareInvite = async () => {
         if (!inviteUrl) return;
-        const sharePayload = { title: 'Eary daveti', text: `${inviteText}\n${inviteUrl}` };
-        try {
-            if (navigator.share) {
-                await navigator.share(sharePayload);
-                setRequestFeedback('Paylaşım seçenekleri açıldı');
-                return;
-            }
-            await navigator.clipboard.writeText(inviteUrl);
-            setRequestFeedback('Bu cihazda paylaşım penceresi yok; bağlantı kopyalandı');
-        } catch (error) {
-            if (error?.name !== 'AbortError') {
-                await navigator.clipboard.writeText(inviteUrl);
-                setRequestFeedback('Paylaşım açılamadı; bağlantı kopyalandı');
-            }
-        }
+        const result = await shareInviteLink({ inviteUrl, inviteText });
+        if (result.status === 'shared') setRequestFeedback('Paylaşım seçenekleri açıldı');
+        if (result.status === 'copied') setRequestFeedback('Paylaşım açılamadı; bağlantı kopyalandı');
     };
 
     const sendRequest = async profile => {
@@ -198,7 +187,7 @@ export default function NewConversation({ account, onBack, onOpenContacts, onSen
                     </div>
                     <div className="mt-3 grid grid-cols-2 gap-2">
                         <button type="button" onClick={copyInvite} className="eary-soft eary-brand flex items-center justify-center gap-2 rounded-lg py-2.5 text-xs font-black"><Copy size={16} /> {inviteCopied ? 'Kopyalandı' : 'Kopyala'}</button>
-                        <button type="button" onClick={shareInvite} className="eary-brand-bg flex items-center justify-center gap-2 rounded-lg py-2.5 text-xs font-black"><Share2 size={16} /> Paylaşımı aç</button>
+                        <button type="button" onClick={shareInvite} className="eary-brand-bg flex items-center justify-center gap-2 rounded-lg py-2.5 text-xs font-black"><Share2 size={16} /> Paylaş</button>
                     </div>
                     <div className="mt-3 grid grid-cols-3 gap-2 text-center">
                         {['İstek gelir', 'Kabul edilir', 'Sohbet açılır'].map((step, index) => (
@@ -251,7 +240,7 @@ export default function NewConversation({ account, onBack, onOpenContacts, onSen
                         <BookUser size={19}/>
                         <span>
                             <span className="block text-xs font-black">Telefon rehberinden bul</span>
-                            <span className="eary-muted block text-[9px] font-semibold">Numaralar profilde gösterilmez</span>
+                            <span className="eary-muted block text-[9px] font-semibold">İlk kullanımda rehber izni istenir; numaralar profilde gösterilmez</span>
                         </span>
                     </button>
                 )}
