@@ -2009,16 +2009,6 @@ export default function IntercomInterface({ roomData, onLeave, language = 'tr-TR
                     setSpeechPreview(pendingText);
                 }
                 setIsListening(true);
-                const activeRecognizer = recognitionRef.current;
-                setTimeout(() => {
-                    if (!isListeningRef.current || ignoreSpeechResultsRef.current || speechStopSentRef.current) return;
-                    try {
-                        if (typeof activeRecognizer?.restart === 'function') activeRecognizer.restart();
-                        else activeRecognizer?.start?.();
-                    } catch (error) {
-                        console.warn('Speech recognition could not continue after pause:', error);
-                    }
-                }, 120);
                 return;
             }
             const pendingText = commitSpeechLiveSegment();
@@ -2056,6 +2046,7 @@ export default function IntercomInterface({ roomData, onLeave, language = 'tr-TR
                 errorStr.includes("cancelled") ||
                 errorStr.includes("canceled")
             ) {
+                commitSpeechLiveSegment();
                 if (isListeningRef.current) setIsListening(true);
                 return;
             }

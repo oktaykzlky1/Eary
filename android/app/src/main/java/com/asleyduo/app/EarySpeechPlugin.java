@@ -34,7 +34,7 @@ public class EarySpeechPlugin extends Plugin {
     private static final int POSSIBLY_COMPLETE_SILENCE_MS = 15000;
     private static final int MINIMUM_SESSION_MS = 600000;
     private static final long FAST_HANDOFF_DELAY_MS = 40;
-    private static final long END_OF_SPEECH_WATCHDOG_MS = 850;
+    private static final long END_OF_SPEECH_WATCHDOG_MS = 12000;
 
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
     private SpeechRecognizer recognizer;
