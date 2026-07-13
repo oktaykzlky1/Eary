@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
     ArrowLeft, BellOff, Captions, ChevronRight, Languages, LockKeyhole, MessageCircle, MessageSquarePlus,
-    Menu, Mic, Save, Search, Send, Settings, Share2, Sparkles, Star, Trash2, UserPlus, UserRound, X
+    Check, Menu, Mic, Pencil, Save, Search, Send, Settings, Share2, Sparkles, Star, Trash2, UserPlus, UserRound, X
 } from 'lucide-react';
 import { Capacitor, registerPlugin } from '@capacitor/core';
 import { db, ref, get, getRest, onValue, push, update, updateRest } from '../firebase';
@@ -33,6 +33,30 @@ const writeJson = (key, value) => {
 
 const RECENT_ACTIVITIES_KEY = 'eary_recent_activities';
 const CAPTION_SESSIONS_KEY = 'eary_caption_sessions';
+
+const activityPreviewText = activity => String(
+    activity?.processedText
+    || activity?.transcriptText
+    || activity?.preview
+    || ''
+).trim();
+
+const splitDocumentParagraphs = text => String(text || '')
+    .split(/\n{2,}|\r?\n/)
+    .map(line => line.trim())
+    .filter(Boolean);
+
+const escapeRegExp = value => String(value || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+const highlightText = (text, query) => {
+    const value = String(text || '');
+    const needle = String(query || '').trim();
+    if (!needle) return value;
+    const parts = value.split(new RegExp(`(${escapeRegExp(needle)})`, 'gi'));
+    return parts.map((part, index) => part.toLocaleLowerCase('tr-TR') === needle.toLocaleLowerCase('tr-TR')
+        ? <mark key={`${part}-${index}`} className="rounded bg-amber-200 px-0.5 text-[#17221f]">{part}</mark>
+        : part);
+};
 
 const compactPreview = value => {
     const words = String(value || '').replace(/\s+/g, ' ').trim().split(/\s+/).filter(Boolean);
@@ -113,6 +137,10 @@ function PremiumHome({ activeMode, setActiveMode, onLaunchMode, onOpenChats, onO
     const homeModes = getHomeModes(language);
     const text = uiText(language);
     const selectedMode = homeModes.find(mode => mode.id === activeMode) || homeModes[1];
+    const [, setActivityVersion] = useState(0);
+    const [activityDeleteTarget, setActivityDeleteTarget] = useState(null);
+    const activityPressTimerRef = useRef(null);
+    const suppressActivityClickRef = useRef(false);
     const activities = readJson(RECENT_ACTIVITIES_KEY, []);
     const activityRows = activities.filter(activity => activity.type === activeMode).slice(0, 4);
     const chatRows = recentItems.slice(0, 4).map(item => {
@@ -132,7 +160,7 @@ function PremiumHome({ activeMode, setActiveMode, onLaunchMode, onOpenChats, onO
         : activityRows.map(activity => ({
             id: activity.id,
             title: activity.title,
-            preview: compactPreview(activity.preview),
+            preview: compactPreview(activityPreviewText(activity)),
             createdAt: activity.createdAt,
             meta: activity.meta,
             icon: activeMode === 'ambient' ? Captions : Languages,
@@ -143,6 +171,33 @@ function PremiumHome({ activeMode, setActiveMode, onLaunchMode, onOpenChats, onO
         ambient: 'Henüz ortam dinleme aktivitesi yok. Dinlemeye başladığında son metin burada görünür; kaydetmek ayrı bir işlemdir.',
         chats: 'Henüz sohbet yok. Kişi bulabilir veya test sohbeti açabilirsin.'
     }[activeMode];
+
+    const clearActivityPressTimer = () => {
+        if (!activityPressTimerRef.current) return;
+        clearTimeout(activityPressTimerRef.current);
+        activityPressTimerRef.current = null;
+    };
+
+    const startActivityLongPress = activity => {
+        if (!activity || activeMode === 'chats') return;
+        clearActivityPressTimer();
+        suppressActivityClickRef.current = false;
+        activityPressTimerRef.current = setTimeout(() => {
+            suppressActivityClickRef.current = true;
+            setActivityDeleteTarget(activity);
+            activityPressTimerRef.current = null;
+        }, 560);
+    };
+
+    const deleteActivity = () => {
+        if (!activityDeleteTarget) return;
+        writeJson(RECENT_ACTIVITIES_KEY, readJson(RECENT_ACTIVITIES_KEY, []).filter(item => item.id !== activityDeleteTarget.id));
+        writeJson(CAPTION_SESSIONS_KEY, readJson(CAPTION_SESSIONS_KEY, []).filter(session =>
+            String(session.id) !== String(activityDeleteTarget.sessionId) && String(session.id) !== String(activityDeleteTarget.id)
+        ));
+        setActivityDeleteTarget(null);
+        setActivityVersion(version => version + 1);
+    };
 
     return (
         <main className="eary-shell eary-line relative mx-auto flex h-screen w-full max-w-md flex-col overflow-hidden bg-[var(--surface)] sm:h-[780px] sm:rounded-xl sm:border sm:shadow-xl">
@@ -191,7 +246,22 @@ function PremiumHome({ activeMode, setActiveMode, onLaunchMode, onOpenChats, onO
                                     <button
                                         key={row.id}
                                         type="button"
-                                        onClick={() => activeMode === 'chats' ? onOpenChatItem?.(row.item) : onOpenActivity?.(row.activity)}
+                                        onPointerDown={() => startActivityLongPress(row.activity)}
+                                        onPointerUp={clearActivityPressTimer}
+                                        onPointerLeave={clearActivityPressTimer}
+                                        onPointerCancel={clearActivityPressTimer}
+                                        onContextMenu={event => {
+                                            if (activeMode === 'chats') return;
+                                            event.preventDefault();
+                                            setActivityDeleteTarget(row.activity);
+                                        }}
+                                        onClick={() => {
+                                            if (suppressActivityClickRef.current) {
+                                                suppressActivityClickRef.current = false;
+                                                return;
+                                            }
+                                            activeMode === 'chats' ? onOpenChatItem?.(row.item) : onOpenActivity?.(row.activity);
+                                        }}
                                         className="flex w-full items-center gap-3 py-3 text-left"
                                     >
                                         <span className="eary-soft eary-brand flex h-11 w-11 shrink-0 items-center justify-center rounded-full"><RowIcon size={20} /></span>
@@ -215,6 +285,23 @@ function PremiumHome({ activeMode, setActiveMode, onLaunchMode, onOpenChats, onO
                 <button type="button" onClick={onOpenChats} className="eary-muted flex flex-col items-center gap-1 text-[10px] font-semibold"><MessageCircle size={20} />{text.navChats}</button>
                 <button type="button" onClick={onOpenSettings} className="eary-muted flex flex-col items-center gap-1 text-[10px] font-semibold"><Settings size={20} />{text.navSettings}</button>
             </nav>
+            {activityDeleteTarget && (
+                <div className="absolute inset-0 z-[80] flex items-end bg-black/35 px-4 pb-[max(18px,env(safe-area-inset-bottom))]" onClick={() => setActivityDeleteTarget(null)}>
+                    <section className="eary-shell w-full rounded-xl p-4 shadow-2xl" onClick={event => event.stopPropagation()}>
+                        <div className="mb-4 flex items-start gap-3">
+                            <span className="eary-soft flex h-11 w-11 shrink-0 items-center justify-center rounded-lg text-rose-600"><Trash2 size={20} /></span>
+                            <div className="min-w-0 flex-1">
+                                <h2 className="text-sm font-black">Aktiviteyi sil</h2>
+                                <p className="eary-muted mt-1 line-clamp-2 text-xs font-semibold">{activityDeleteTarget.title || 'Eary aktivitesi'}</p>
+                            </div>
+                        </div>
+                        <div className="grid grid-cols-2 gap-2">
+                            <button type="button" onClick={() => setActivityDeleteTarget(null)} className="eary-soft eary-muted rounded-lg py-3 text-sm font-black">Vazgec</button>
+                            <button type="button" onClick={deleteActivity} className="rounded-lg bg-rose-600 py-3 text-sm font-black text-white">Sil</button>
+                        </div>
+                    </section>
+                </div>
+            )}
         </main>
     );
 }
@@ -266,16 +353,23 @@ function ActivityDetailView({ activity, onBack }) {
     const [currentActivity, setCurrentActivity] = useState(activity);
     const [ambientDraft, setAmbientDraft] = useState(() => activityText(activity));
     const [statusText, setStatusText] = useState('');
+    const [isEditingAmbient, setIsEditingAmbient] = useState(false);
+    const [searchOpen, setSearchOpen] = useState(false);
+    const [documentSearch, setDocumentSearch] = useState('');
     const isFace = currentActivity?.type === 'face';
     const messages = Array.isArray(currentActivity?.messages) ? currentActivity.messages.filter(message => message?.text) : [];
     const fallbackText = activityText(currentActivity);
-    const title = activity?.title || (isFace ? 'Yüz yüze görüşme' : 'Ortam dinleme');
+    const title = currentActivity?.title || (isFace ? 'Yüz yüze görüşme' : 'Ortam dinleme');
     const createdAt = Number(currentActivity?.createdAt || 0);
+    const ambientParagraphs = splitDocumentParagraphs(ambientDraft);
 
     useEffect(() => {
         setCurrentActivity(activity);
         setAmbientDraft(activityText(activity));
         setStatusText('');
+        setIsEditingAmbient(false);
+        setSearchOpen(false);
+        setDocumentSearch('');
     }, [activity]);
 
     const saveAmbientDraft = () => {
@@ -283,6 +377,7 @@ function ActivityDetailView({ activity, onBack }) {
         setCurrentActivity(updatedActivity);
         setAmbientDraft(activityText(updatedActivity));
         setStatusText('Kaydedildi');
+        setIsEditingAmbient(false);
         setTimeout(() => setStatusText(''), 1800);
     };
 
@@ -314,6 +409,29 @@ function ActivityDetailView({ activity, onBack }) {
                 </div>
             </header>
 
+            {!isFace && (
+                <div className="border-b eary-line px-4 py-3">
+                    <div className="mb-3 flex justify-end gap-1">
+                        <button type="button" onClick={() => setSearchOpen(value => !value)} className={`flex h-9 w-9 items-center justify-center rounded-lg ${searchOpen ? 'eary-brand-bg' : 'eary-soft eary-brand'}`} title="Ara"><Search size={17} /></button>
+                        <button type="button" onClick={shareAmbientDraft} disabled={!ambientDraft.trim()} className="eary-soft eary-brand flex h-9 w-9 items-center justify-center rounded-lg disabled:opacity-30" title="Paylas"><Share2 size={17} /></button>
+                        <button type="button" onClick={saveAmbientDraft} disabled={!ambientDraft.trim()} className="eary-soft eary-brand flex h-9 w-9 items-center justify-center rounded-lg disabled:opacity-30" title="Kaydet"><Save size={17} /></button>
+                        <button type="button" onClick={() => setIsEditingAmbient(value => !value)} className={`flex h-9 w-9 items-center justify-center rounded-lg ${isEditingAmbient ? 'eary-brand-bg' : 'eary-soft eary-brand'}`} title="Duzenle">{isEditingAmbient ? <Check size={17} /> : <Pencil size={17} />}</button>
+                    </div>
+                    {searchOpen && (
+                        <div className="relative">
+                            <Search size={15} className="eary-muted absolute left-3 top-2.5" />
+                            <input
+                                value={documentSearch}
+                                onChange={event => setDocumentSearch(event.target.value)}
+                                className="eary-input w-full rounded-lg border eary-line bg-white py-2 pl-9 pr-9 text-sm font-semibold"
+                                placeholder="Transkript icinde ara"
+                            />
+                            {documentSearch && <button type="button" onClick={() => setDocumentSearch('')} className="eary-muted absolute right-3 top-2.5"><X size={15} /></button>}
+                        </div>
+                    )}
+                </div>
+            )}
+
             <section className="flex-1 overflow-y-auto px-4 py-5">
                 {isFace ? (
                     <div className="space-y-3">
@@ -331,25 +449,38 @@ function ActivityDetailView({ activity, onBack }) {
                         {!messages.length && !fallbackText && <p className="eary-muted py-12 text-center text-sm">Bu aktivitede henüz transkript yok.</p>}
                     </div>
                 ) : (
-                    <article className="space-y-3">
-                        <textarea
-                            value={ambientDraft}
-                            onChange={event => setAmbientDraft(event.target.value)}
-                            rows={16}
-                            className="eary-input min-h-[360px] w-full resize-none rounded-lg border eary-line bg-white/80 p-4 text-[15px] font-semibold leading-8 text-[var(--text)]"
-                            placeholder="Bu aktivitede henuz transkript yok."
-                            aria-label="Ortam transkriptini duzenle"
-                        />
-                        <div className="flex gap-2">
-                            <button type="button" onClick={saveAmbientDraft} disabled={!ambientDraft.trim()} className="eary-brand-bg flex flex-1 items-center justify-center gap-2 rounded-lg px-4 py-3 text-sm font-black disabled:opacity-40">
-                                <Save size={17} /> Kaydet
-                            </button>
-                            <button type="button" onClick={shareAmbientDraft} disabled={!ambientDraft.trim()} className="eary-soft eary-brand flex flex-1 items-center justify-center gap-2 rounded-lg px-4 py-3 text-sm font-black disabled:opacity-40">
-                                <Share2 size={17} /> Paylas
-                            </button>
-                        </div>
+                    <div className="space-y-3">
+                        <article className="rounded-lg bg-[#eef2f0] p-3 shadow-inner">
+                            <div className="min-h-[480px] rounded-md border eary-line bg-white px-5 py-6 shadow-sm">
+                                <div className="mb-5 border-b eary-line pb-3">
+                                    <p className="eary-muted text-[9px] font-black uppercase">Eary transkript belgesi</p>
+                                    <h2 className="mt-1 text-lg font-black text-[var(--text)]">{title}</h2>
+                                    {createdAt > 0 && <p className="eary-muted mt-1 text-[10px] font-semibold">{new Date(createdAt).toLocaleString('tr-TR')}</p>}
+                                </div>
+                                {isEditingAmbient ? (
+                                    <textarea
+                                        value={ambientDraft}
+                                        onChange={event => setAmbientDraft(event.target.value)}
+                                        rows={18}
+                                        className="eary-input min-h-[380px] w-full resize-none border-0 bg-transparent p-0 text-[15px] font-semibold leading-8 text-[var(--text)] shadow-none focus:ring-0"
+                                        placeholder="Bu aktivitede henuz transkript yok."
+                                        aria-label="Ortam transkriptini duzenle"
+                                    />
+                                ) : ambientParagraphs.length ? (
+                                    <div className="space-y-4">
+                                        {ambientParagraphs.map((paragraph, index) => (
+                                            <p key={`${paragraph}-${index}`} className="whitespace-pre-wrap break-words text-[15px] font-semibold leading-8 text-[var(--text)]">
+                                                {highlightText(paragraph, documentSearch)}
+                                            </p>
+                                        ))}
+                                    </div>
+                                ) : (
+                                    <p className="eary-muted py-16 text-center text-sm">Bu aktivitede henuz transkript yok.</p>
+                                )}
+                            </div>
+                        </article>
                         {statusText && <p className="eary-muted text-center text-xs font-bold">{statusText}</p>}
-                    </article>
+                    </div>
                 )}
             </section>
         </main>

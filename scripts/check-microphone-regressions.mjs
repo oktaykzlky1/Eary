@@ -86,11 +86,23 @@ const checks = [
     file: files.chatHome,
     ok: contents.chatHome.includes('updateStoredAmbientTranscript') &&
       contents.chatHome.includes('CAPTION_SESSIONS_KEY') &&
-      contents.chatHome.includes('textarea') &&
+      contents.chatHome.includes('Eary transkript belgesi') &&
+      contents.chatHome.includes('isEditingAmbient ?') &&
+      contents.chatHome.includes('Pencil size={17}') &&
+      contents.chatHome.includes('Search size={17}') &&
       contents.chatHome.includes('navigator.share') &&
       contents.chatHome.includes('Share2 size={17}') &&
       contents.chatHome.includes('Save size={17}'),
-    message: 'Ambient activity detail must keep editable transcript text with save and share actions.',
+    message: 'Ambient activity detail must stay as a document-style reader with explicit search, edit, save and share actions.',
+  },
+  {
+    file: files.chatHome,
+    ok: contents.chatHome.includes('activityPreviewText') &&
+      contents.chatHome.includes('compactPreview(activityPreviewText(activity))') &&
+      contents.chatHome.includes('startActivityLongPress') &&
+      contents.chatHome.includes('deleteActivity') &&
+      contents.chatHome.includes('Aktiviteyi sil'),
+    message: 'Home activity rows must preview saved transcript text and support long-press delete.',
   },
   {
     file: files.chatHome,
