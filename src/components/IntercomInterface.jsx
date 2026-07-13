@@ -1356,6 +1356,11 @@ export default function IntercomInterface({ roomData, onLeave, language = 'tr-TR
         };
     }, [roomId, messages.length, messagesReady, translations, autoTranslate, splitScreenEnabled, isSelectMode, hasPinnedInitialChat, pinChatToBottom]);
 
+    useLayoutEffect(() => {
+        if (!messagesReady || splitScreenEnabled || isSelectMode || !isListening || !interimText || !shouldAutoScrollRef.current) return;
+        pinChatToBottom();
+    }, [interimText, isListening, isSelectMode, messagesReady, pinChatToBottom, splitScreenEnabled]);
+
     const handleChatScroll = () => {
         if (programmaticScrollTimerRef.current) return;
         const container = chatContainerRef.current;
@@ -1493,6 +1498,25 @@ export default function IntercomInterface({ roomData, onLeave, language = 'tr-TR
             || ''
         ).trim();
     };
+
+    const handleSpeechDraftWordClick = event => {
+        const index = Number(event.currentTarget.dataset.wordIndex || -1);
+        const currentText = String(interimText || '').trim();
+        if (!currentText) return;
+        const words = currentText.split(/\s+/);
+        if (index < 0 || index >= words.length) return;
+        const currentWord = words[index] || '';
+        const nextWord = window.prompt('Kelimeyi düzeltin', currentWord);
+        if (nextWord === null) return;
+        const cleanWord = nextWord.replace(/\s+/g, ' ').trim();
+        if (!cleanWord) words.splice(index, 1);
+        else words[index] = cleanWord;
+        const nextText = words.join(' ').trim().slice(0, MAX_VOICE_MESSAGE_CHARS).trim();
+        finalizedSpeechRef.current = nextText;
+        lastCapturedTextRef.current = nextText;
+        setSpeechPreview(nextText);
+    };
+
     const resetSpeechCapture = () => {
         lastCapturedTextRef.current = '';
         finalizedSpeechRef.current = '';
@@ -1881,7 +1905,15 @@ export default function IntercomInterface({ roomData, onLeave, language = 'tr-TR
             if (ignoreSpeechResultsRef.current || speechStopSentRef.current) return;
             if (finalText.trim()) {
                 const chunk = finalText.trim();
-                finalizedSpeechRef.current = mergeSpeechTranscriptChunk(finalizedSpeechRef.current, chunk);
+                const currentDraft = String(interimTextRef.current || lastCapturedTextRef.current || '').trim();
+                const mergedFinal = mergeSpeechTranscriptChunk(finalizedSpeechRef.current, chunk);
+                const lowerDraft = currentDraft.toLocaleLowerCase('tr-TR');
+                const lowerFinal = mergedFinal.toLocaleLowerCase('tr-TR');
+                finalizedSpeechRef.current = currentDraft
+                    && mergedFinal.length < currentDraft.length
+                    && (lowerDraft.endsWith(lowerFinal) || lowerDraft.includes(lowerFinal))
+                    ? currentDraft
+                    : mergedFinal;
                 const rawFinal = finalizedSpeechRef.current.slice(0, MAX_VOICE_MESSAGE_CHARS).trim();
                 lastCapturedTextRef.current = rawFinal;
                 setSpeechPreview(rawFinal);
@@ -2097,6 +2129,31 @@ export default function IntercomInterface({ roomData, onLeave, language = 'tr-TR
                     }
                 }
             }
+        }
+    };
+
+    const cancelSpeechCapture = () => {
+        ignoreSpeechResultsRef.current = true;
+        suppressNextSpeechEndRef.current = true;
+        speechStopSentRef.current = true;
+        speechStartInFlightRef.current = false;
+        speechClosingRef.current = false;
+        isListeningRef.current = false;
+        setIsSpeechStarting(false);
+        setIsListening(false);
+        stopActiveStream();
+        const recognizer = recognitionRef.current;
+        recognitionRef.current = null;
+        lastCapturedTextRef.current = '';
+        finalizedSpeechRef.current = '';
+        interimTextRef.current = '';
+        clearSpeechPreview();
+        playBeep('stop');
+        try {
+            if (recognizer && typeof recognizer.abort === 'function') recognizer.abort();
+            else recognizer?.stop?.();
+        } catch (error) {
+            console.warn('Speech recognition cancel failed:', error);
         }
     };
 
@@ -2528,6 +2585,40 @@ export default function IntercomInterface({ roomData, onLeave, language = 'tr-TR
         </div>
     );
 
+    const renderSpeechDraftBubble = draftText => {
+        if (!isListening || !draftText || splitScreenEnabled) return null;
+        const words = draftText.split(/\s+/).filter(Boolean);
+
+        return (
+            <div className="flex items-start justify-end gap-2.5">
+                <div className="flex max-w-[85%] flex-col items-end">
+                    <span className="px-1 text-[10px] font-semibold tracking-wider text-[#8A7E9F]">
+                        {nickname}
+                    </span>
+                    <div className="rounded-2xl rounded-br-sm border border-[#DCD0EC]/70 bg-white/35 px-4 py-3 text-[#111827] shadow-sm">
+                        <p style={{ fontSize: `${chatFontSize}px` }} className="font-medium leading-relaxed opacity-45">
+                            {words.map((word, index) => (
+                                <button
+                                    key={`${word}-${index}`}
+                                    type="button"
+                                    data-word-index={index}
+                                    onClick={handleSpeechDraftWordClick}
+                                    className="mx-0.5 rounded px-0.5 text-left underline decoration-dotted underline-offset-2 transition hover:bg-white/70 hover:opacity-100"
+                                    title="Kelimeyi düzelt"
+                                >
+                                    {word}
+                                </button>
+                            ))}
+                        </p>
+                    </div>
+                    <span className="mt-1 px-1 text-[9px] font-semibold text-[#8A7E9F] opacity-70">
+                        Taslak - mik kapanınca gönderilir
+                    </span>
+                </div>
+            </div>
+        );
+    };
+
     if (splitScreenEnabled && !faceSessionActive) {
         return (
             <main className="eary-shell relative mx-auto flex h-screen w-full max-w-md flex-col px-5 pb-6 pt-[max(92px,calc(env(safe-area-inset-top)+68px))] sm:h-[800px] sm:rounded-xl sm:border sm:eary-line">
@@ -2926,6 +3017,8 @@ export default function IntercomInterface({ roomData, onLeave, language = 'tr-TR
         );
     }
 
+    const speechDraftBubble = renderSpeechDraftBubble(interimText);
+
     return (
         <div
             className="eary-shell relative mx-auto flex h-screen max-w-md flex-col overflow-hidden sm:h-[800px] sm:rounded-xl sm:border sm:eary-line sm:shadow-xl"
@@ -3117,7 +3210,7 @@ export default function IntercomInterface({ roomData, onLeave, language = 'tr-TR
                     )}
                     {!messagesReady ? (
                         <div className="min-h-full" />
-                    ) : messages.length === 0 ? (
+                    ) : messages.length === 0 && !speechDraftBubble ? (
                         <div className="flex min-h-full items-center justify-center p-6 text-center">
                             <p className="text-sm font-light leading-relaxed text-slate-500">
                                 {text.noMessages}
@@ -3253,6 +3346,7 @@ export default function IntercomInterface({ roomData, onLeave, language = 'tr-TR
                         })}
                     </>
                 )}
+                    {speechDraftBubble}
                     <div ref={messagesEndRef} className="h-px shrink-0" />
                 </div>
             </main>
@@ -3261,7 +3355,7 @@ export default function IntercomInterface({ roomData, onLeave, language = 'tr-TR
                 <button
                     type="button"
                     onClick={scrollToBottom}
-                    className="absolute right-4 bottom-[236px] z-30 flex h-10 w-10 animate-slideIn items-center justify-center rounded-full border border-[#DCD0EC] bg-white text-[#7B52AB] shadow-lg transition-all active:scale-90 cursor-pointer"
+                    className="absolute right-4 bottom-[176px] z-30 flex h-10 w-10 animate-slideIn items-center justify-center rounded-full border border-[#DCD0EC] bg-white text-[#7B52AB] shadow-lg transition-all active:scale-90 cursor-pointer"
                     title="En son mesaja git"
                 >
                     <ChevronDown size={22} />
@@ -3270,21 +3364,6 @@ export default function IntercomInterface({ roomData, onLeave, language = 'tr-TR
 
             {/* Bottom Panel - Input & Speech Control */}
             <footer className="eary-shell space-y-2 border-t eary-line px-3 py-3 pb-[max(12px,env(safe-area-inset-bottom))]">
-                {/* Speech Recognition Real-Time Preview */}
-                {isListening && interimText && (
-                    <div className="max-h-28 overflow-y-auto rounded-2xl border border-[#DCD0EC] bg-[#FAF8F5] p-3">
-                        <span className="mb-1 flex items-center justify-between gap-2 text-[10px] font-bold uppercase tracking-widest text-[#7B52AB]">
-                            <span>{text.interimPreview}</span>
-                            <span className={interimText.length > MAX_VOICE_MESSAGE_CHARS - 80 ? 'text-rose-500' : 'text-[#8A7E9F]'}>
-                                {interimText.length}/{MAX_VOICE_MESSAGE_CHARS}
-                            </span>
-                        </span>
-                        <p className="text-sm text-[#2D1F47] italic font-medium leading-relaxed">
-                            {interimText}
-                        </p>
-                    </div>
-                )}
-
                 {/* Quoted Message Preview */}
                 {editingMessage && (
                     <div className="flex items-center justify-between p-2.5 bg-[#F4F0F8] border-l-4 border-emerald-500 rounded-r-xl text-xs shadow-sm">
@@ -3385,7 +3464,7 @@ export default function IntercomInterface({ roomData, onLeave, language = 'tr-TR
                 )}
 
                 {/* Pulsating Microphone Action Box */}
-                <div className="eary-soft flex items-center justify-center gap-2 rounded-lg px-3 py-2">
+                <div className="eary-soft flex items-center gap-2 rounded-lg px-3 py-2">
 
                         <button
                             type="button"
@@ -3411,7 +3490,18 @@ export default function IntercomInterface({ roomData, onLeave, language = 'tr-TR
                                 <Mic size={24} />
                             )}
                         </button>
-	                        <span className={`text-[11px] font-semibold flex items-center gap-1.5 ${
+                        {isListening && (
+                            <button
+                                type="button"
+                                onClick={cancelSpeechCapture}
+                                className="flex h-10 shrink-0 items-center gap-1.5 rounded-full border border-rose-200 bg-white px-3 text-[10px] font-black text-rose-600 shadow-sm active:scale-95"
+                                title="Sesli mesajı iptal et"
+                            >
+                                <X size={15} />
+                                İptal
+                            </button>
+                        )}
+	                        <span className={`min-w-0 flex-1 text-[11px] font-semibold flex items-center gap-1.5 ${
 	                            isListening ? 'text-rose-500 animate-pulse' : 'eary-muted'
 	                        }`}>
 	                            {isListening ? (
